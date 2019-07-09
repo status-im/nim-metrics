@@ -27,6 +27,7 @@ proc bench(name: string) =
 
 ### tasks
 task test, "Run tests":
+  # build it with metrics disabled, first
   buildBinary "all_tests", "tests/", "-f"
   test "all_tests"
 
