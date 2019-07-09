@@ -8,11 +8,11 @@
 
 ## Introduction
 
-Metrics client library supporting the [Prometheus](https://prometheus.io/) monitoring toolkit.
+Nim metrics client library supporting the [Prometheus](https://prometheus.io/) monitoring toolkit.
 
 ## Installation
 
-You can install the developement version of the library through nimble with the following command
+You can install the developement version of the library through Nimble with the following command
 ```
 nimble install https://github.com/status-im/nim-metrics@#master
 ```
