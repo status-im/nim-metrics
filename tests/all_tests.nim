@@ -64,6 +64,7 @@ suite "counter":
     lcounter.inc(labelValues = labelValues)
     check(lcounter.value(labelValues) == 1)
     # echo registry.toText()
+    # echo registry.toLog()
 
 suite "gauge":
   setup:

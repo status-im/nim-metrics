@@ -61,7 +61,7 @@ when defined(metrics):
   template processLabelValue*(labelValue: string): string =
     labelValue.multireplace([("\\", "\\\\"), ("\n", "\\n"), ("\"", "\\\"")])
 
-  proc toText*(metric: Metric): string =
+  proc toText*(metric: Metric, showTimestamp = true): string =
     result = metric.name
     if metric.labels.len > 0:
       result.add('{')
@@ -71,7 +71,7 @@ when defined(metrics):
       result.add(textLabels.join(","))
       result.add('}')
     result.add(" " & $metric.value)
-    if metric.timestamp > 0:
+    if showTimestamp and metric.timestamp > 0:
       result.add(" " & $metric.timestamp)
 
 ######################
@@ -107,6 +107,12 @@ when defined(metrics):
     for labelValues, metrics in metricsTable:
       for metric in metrics:
         result.add(metric.toText())
+
+template value*(collector: Collector, labelValues: Labels = @[]): float64 =
+  when defined(metrics):
+    collector.metrics[labelValues][0].value
+  else:
+    0.0
 
 ############
 # registry #
@@ -154,6 +160,15 @@ proc toText*(registry: Registry): string =
       res.add("")
     return res.join("\n")
 
+proc toLog*(registry: Registry): string =
+  when defined(metrics):
+    var res: seq[string] = @[]
+    for collector, metricsTable in registry.collect():
+      for labelValues, metrics in metricsTable:
+        for metric in metrics:
+          res.add(metric.toText(showTimestamp = false))
+    return res.join("; ")
+
 ###########
 # counter #
 ###########
@@ -180,12 +195,6 @@ proc newCounter*(name: string, help: string, labels: Labels = @[], registry = de
     if labels.len == 0:
       result.metrics[labels] = newCounterMetrics(name, labels, labels)
     result.register(registry)
-
-template value*(counter: Counter|Gauge, labelValues: Labels = @[]): float64 =
-  when defined(metrics):
-    counter.metrics[labelValues][0].value
-  else:
-    0.0
 
 proc validateCounterLabelValues*(counter: Counter, labelValues: Labels): Labels =
   when defined(metrics):
