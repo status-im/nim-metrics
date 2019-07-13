@@ -21,9 +21,10 @@ suite "logging":
     var gauge = newGauge("g", "help", registry = registry)
     gauge.set(9.5)
     info "gauge", gauge
-    for collector, metricsTable in registry.collect():
-      for labels, metrics in metricsTable:
-        for metric in metrics:
-          info "metric", metric
+    when defined(metrics):
+      for collector, metricsTable in registry.collect():
+        for labels, metrics in metricsTable:
+          for metric in metrics:
+            info "metric", metric
     info "registry", registry
 

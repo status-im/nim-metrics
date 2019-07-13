@@ -9,37 +9,51 @@ from chronicles import formatIt, expandIt
 import sets, tables,
       ../metrics
 
-formatIt(Metric):
-  it.toText(showTimestamp = false)
+when defined(metrics):
+  formatIt(Metric):
+    it.toText(showTimestamp = false)
 
-proc toLog(collector: Collector): seq[string] =
-  result = @[]
-  for metrics in collector.metrics.values():
-    for metric in metrics:
-      result.add(metric.toText(showTimestamp = false))
+  proc toLog(collector: Collector): seq[string] =
+    result = @[]
+    for metrics in collector.metrics.values():
+      for metric in metrics:
+        result.add(metric.toText(showTimestamp = false))
 
-proc toLog(c: Counter): auto =
-  Collector(c).toLog()
+  proc toLog(c: Counter): auto =
+    Collector(c).toLog()
 
-formatIt(Counter):
-  it.toLog
+  formatIt(Counter):
+    it.toLog
 
-proc toLog(c: Gauge): auto =
-  Collector(c).toLog()
+  proc toLog(c: Gauge): auto =
+    Collector(c).toLog()
 
-formatIt(Gauge):
-  it.toLog
+  formatIt(Gauge):
+    it.toLog
 
-proc toLog(registry: Registry): seq[seq[string]] =
-  result = @[]
-  {.gcsafe.}:
-    for metricsTable in registry.collect().values():
-      for metrics in metricsTable.values():
-        var res: seq[string]
-        for metric in metrics:
-          res.add(metric.toText(showTimestamp = false))
-        result.add(res)
+  proc toLog(registry: Registry): seq[seq[string]] =
+    result = @[]
+    {.gcsafe.}:
+      for metricsTable in registry.collect().values():
+        for metrics in metricsTable.values():
+          var res: seq[string]
+          for metric in metrics:
+            res.add(metric.toText(showTimestamp = false))
+          result.add(res)
 
-formatIt(Registry):
-  it.toLog
+  formatIt(Registry):
+    it.toLog
+else:
+  # not defined(metrics)
+  formatIt(Metric):
+    "metrics disabled"
+
+  formatIt(Counter):
+    "metrics disabled"
+
+  formatIt(Gauge):
+    "metrics disabled"
+
+  formatIt(Registry):
+    "metrics disabled"
 
