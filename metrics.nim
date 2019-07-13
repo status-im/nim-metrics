@@ -160,15 +160,6 @@ proc toText*(registry: Registry): string =
       res.add("")
     return res.join("\n")
 
-proc toLog*(registry: Registry): string =
-  when defined(metrics):
-    var res: seq[string] = @[]
-    for collector, metricsTable in registry.collect():
-      for labelValues, metrics in metricsTable:
-        for metric in metrics:
-          res.add(metric.toText(showTimestamp = false))
-    return res.join("; ")
-
 ###########
 # counter #
 ###########
