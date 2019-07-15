@@ -58,9 +58,6 @@ else:
     "metrics disabled"
 
 # ignored collector
-formatIt(type IgnoredCollector):
-  ""
-
 expandIt(type IgnoredCollector):
   ignored = "ignored"
 
