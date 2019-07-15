@@ -196,15 +196,16 @@ proc validateCounterLabelValues*(counter: Counter, labelValues: Labels): Labels 
       counter.metrics[result] = newCounterMetrics(counter.name, counter.labels, result)
 
 proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels = @[]) =
-  var timestamp = getTime().toMilliseconds()
+  when defined(metrics):
+    var timestamp = getTime().toMilliseconds()
 
-  if amount < 0:
-    raise newException(ValueError, "inc() cannot be used with negative amounts")
+    if amount < 0:
+      raise newException(ValueError, "inc() cannot be used with negative amounts")
 
-  let labelValuesCopy = validateCounterLabelValues(counter, labelValues)
+    let labelValuesCopy = validateCounterLabelValues(counter, labelValues)
 
-  atomicAdd(counter.metrics[labelValuesCopy][0].value.addr, amount.float64)
-  atomicStore(cast[ptr int64](counter.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+    atomicAdd(counter.metrics[labelValuesCopy][0].value.addr, amount.float64)
+    atomicStore(cast[ptr int64](counter.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
 
 template inc*(counter: Counter, amount: int64|float64 = 1, labelValues: Labels = @[]) =
   when defined(metrics):
@@ -281,23 +282,26 @@ proc validateGaugeLabelValues*(gauge: Gauge, labelValues: Labels): Labels =
       gauge.metrics[result] = newGaugeMetrics(gauge.name, gauge.labels, result)
 
 proc incGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: Labels = @[]) =
-  var timestamp = getTime().toMilliseconds()
+  when defined(metrics):
+    var timestamp = getTime().toMilliseconds()
 
-  let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
+    let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
 
-  atomicAdd(gauge.metrics[labelValuesCopy][0].value.addr, amount.float64)
-  atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+    atomicAdd(gauge.metrics[labelValuesCopy][0].value.addr, amount.float64)
+    atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
 
 proc decGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: Labels = @[]) =
-  gauge.inc((-amount).float64, labelValues)
+  when defined(metrics):
+    gauge.inc((-amount).float64, labelValues)
 
 proc setGauge(gauge: Gauge, value: int64|float64, labelValues: Labels = @[]) =
-  var timestamp = getTime().toMilliseconds()
+  when defined(metrics):
+    var timestamp = getTime().toMilliseconds()
 
-  let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
+    let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
 
-  atomicStoreN(cast[ptr int64](gauge.metrics[labelValuesCopy][0].value.addr), cast[int64](value.float64), ATOMIC_SEQ_CST)
-  atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+    atomicStoreN(cast[ptr int64](gauge.metrics[labelValuesCopy][0].value.addr), cast[int64](value.float64), ATOMIC_SEQ_CST)
+    atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
 
 template inc*(gauge: Gauge, amount: int64|float64 = 1, labelValues: Labels = @[]) =
   when defined(metrics):
@@ -365,13 +369,13 @@ template publicGauge*(identifier: untyped,
 # Disabled collectors #
 #######################
 
-template inc*(gauge: IgnoredCollector, amount: int64|float64 = 1, labelValues: Labels = @[]) =
+template inc*(gauge: type IgnoredCollector, amount: int64|float64 = 1, labelValues: Labels = @[]) =
   discard
 
-template dec*(gauge: IgnoredCollector, amount: int64|float64 = 1, labelValues: Labels = @[]) =
+template dec*(gauge: type IgnoredCollector, amount: int64|float64 = 1, labelValues: Labels = @[]) =
   discard
 
-template set*(gauge: IgnoredCollector, value: int64|float64, labelValues: Labels = @[]) =
+template set*(gauge: type IgnoredCollector, value: int64|float64, labelValues: Labels = @[]) =
   discard
 
 ###############
