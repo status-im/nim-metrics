@@ -8,17 +8,23 @@
 import os, strutils, unittest,
       ../metrics
 
-gauge   globalGauge, "help"
-counter globalCounter, "help"
+newCounter globalCounter, "help"
+newPublicCounter globalPublicCounter, "help"
+newGauge globalGauge, "help"
+newPublicGauge globalPublicGauge, "help"
 
-proc gcSafetyTest {.gcsafe.} = # The test is succesful if this proc compiles
-  globalGauge.set 10.0
+proc gcSafetyTest* {.gcsafe.} = # The test is succesful if this proc compiles
   globalCounter.inc 2
+  globalPublicCounter.inc(2)
+  globalGauge.set 10.0
+  globalGauge.inc
+  globalGauge.dec
+  globalPublicGauge.set(1)
 
 suite "counter":
   setup:
     var registry = newRegistry()
-    var counter = newCounter("c_total", "help", registry = registry)
+    newCounter(counter, "help", registry = registry)
 
   test "increment":
     check(counter.value == 0)
@@ -59,7 +65,7 @@ suite "counter":
     # echo counter.toTextLines().join("\n")
 
   test "labels":
-    var lcounter = newCounter("l", "l help", @["foo", "bar"], registry)
+    newCounter(lcounter, "l help", @["foo", "bar"], registry)
     expect KeyError:
       discard lcounter.value
 
@@ -75,7 +81,7 @@ suite "counter":
 suite "gauge":
   setup:
     var registry = newRegistry()
-    var gauge = newGauge("g", "help", registry = registry)
+    newGauge(gauge, "help", registry = registry)
 
   test "basic":
     check(gauge.value == 0)
@@ -95,7 +101,7 @@ suite "gauge":
       check(gauge.value == 1)
     check(gauge.value == 0)
 
-    var lgauge = newGauge("lg", "help", @["foobar"], registry = registry)
+    newGauge(lgauge, "help", @["foobar"], registry = registry)
     let labelValues = @["b"]
     lgauge.trackInProgress(labelValues):
       check(lgauge.value(labelValues) == 1)
@@ -110,7 +116,7 @@ suite "gauge":
     # echo registry.toText()
 
   test "timing with labels":
-    var lgauge = newGauge("lg", "help", @["foobar"], registry = registry)
+    newGauge(lgauge, "help", @["foobar"], registry = registry)
     let labelValues = @["b"]
     lgauge.time(labelValues):
       sleep(1000)

@@ -11,14 +11,14 @@ import chronicles, tables, unittest,
 suite "logging":
   test "info":
     var registry = newRegistry()
-    var counter = newCounter("c_total", "help", registry = registry)
+    newCounter(counter, "help", registry = registry)
     counter.inc()
     info "counter", counter
-    var lcounter = newCounter("l", "l help", @["foo", "bar"], registry)
+    newCounter(lcounter, "l help", @["foo", "bar"], registry)
     let labelValues = @["a", "x \"y\" \n\\z"]
     lcounter.inc(4.5, labelValues = labelValues)
     info "lcounter", lcounter
-    var gauge = newGauge("g", "help", registry = registry)
+    newGauge(gauge, "help", registry = registry)
     gauge.set(9.5)
     info "gauge", gauge
     when defined(metrics):

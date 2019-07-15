@@ -25,6 +25,8 @@ type
     labels*: Labels
     metrics*: Metrics
 
+  IgnoredCollector* = object
+
   Counter* = ref object of Collector
   Gauge* = ref object of Collector
 
@@ -33,8 +35,6 @@ type
     collectors*: OrderedSet[Collector]
 
   RegistrationError* = object of Exception
-
-  IgnoredCollector* = object
 
 const CONTENT_TYPE* = "text/plain; version=0.0.4; charset=utf-8"
 
@@ -110,8 +110,8 @@ when defined(metrics):
       for metric in metrics:
         result.add(metric.toText())
 
-template value*(collector: Collector, labelValues: Labels = @[]): float64 =
-  when defined(metrics):
+template value*(collector: Collector | type IgnoredCollector, labelValues: Labels = @[]): float64 =
+  when defined(metrics) and collector is not IgnoredCollector:
     collector.metrics[labelValues][0].value
   else:
     0.0
@@ -166,8 +166,8 @@ proc toText*(registry: Registry): string =
 # counter #
 ###########
 
-proc newCounterMetrics*(name: string, labels, labelValues: Labels): seq[Metric] =
-  when defined(metrics):
+when defined(metrics):
+  proc newCounterMetrics(name: string, labels, labelValues: Labels): seq[Metric] =
     result = @[
       Metric(name: name,
             labels: labels,
@@ -178,8 +178,12 @@ proc newCounterMetrics*(name: string, labels, labelValues: Labels): seq[Metric] 
             value: getTime().toMilliseconds().float64),
     ]
 
-proc newCounter*(name: string, help: string, labels: Labels = @[], registry = defaultRegistry): Counter =
-  when defined(metrics):
+  proc validateCounterLabelValues(counter: Counter, labelValues: Labels): Labels =
+    result = validateLabelValues(counter, labelValues)
+    if result notin counter.metrics:
+      counter.metrics[result] = newCounterMetrics(counter.name, counter.labels, result)
+
+  proc newCounterImpl*(name: string, help: string, labels: Labels = @[], registry = defaultRegistry): Counter =
     result = Counter(name: name,
                     help: help,
                     typ: "counter",
@@ -189,11 +193,25 @@ proc newCounter*(name: string, help: string, labels: Labels = @[], registry = de
       result.metrics[labels] = newCounterMetrics(name, labels, labels)
     result.register(registry)
 
-proc validateCounterLabelValues*(counter: Counter, labelValues: Labels): Labels =
+template newCounter*(identifier: untyped,
+                    help: static string,
+                    labels: Labels = @[],
+                    registry = defaultRegistry) {.dirty.} =
+  # fine-grained collector disabling will go in here, turning disabled
+  # collectors into type aliases for IgnoredCollector
   when defined(metrics):
-    result = validateLabelValues(counter, labelValues)
-    if result notin counter.metrics:
-      counter.metrics[result] = newCounterMetrics(counter.name, counter.labels, result)
+    var identifier = newCounterImpl(astToStr(identifier), help, labels, registry)
+  else:
+    type identifier = IgnoredCollector
+
+template newPublicCounter*(identifier: untyped,
+                           help: static string,
+                           labels: Labels = @[],
+                           registry = defaultRegistry) {.dirty.} =
+  when defined(metrics):
+    var identifier* = newCounterImpl(astToStr(identifier), help, labels, registry)
+  else:
+    type identifier* = IgnoredCollector
 
 proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels = @[]) =
   when defined(metrics):
@@ -207,12 +225,12 @@ proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels
     atomicAdd(counter.metrics[labelValuesCopy][0].value.addr, amount.float64)
     atomicStore(cast[ptr int64](counter.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
 
-template inc*(counter: Counter, amount: int64|float64 = 1, labelValues: Labels = @[]) =
-  when defined(metrics):
+template inc*(counter: Counter | type IgnoredCollector, amount: int64|float64 = 1, labelValues: Labels = @[]) =
+  when defined(metrics) and counter is not IgnoredCollector:
     {.gcsafe.}: incCounter(counter, amount, labelValues)
 
-template countExceptions*(counter: Counter, typ: typedesc, labelValues: Labels, body: untyped) =
-  when defined(metrics):
+template countExceptions*(counter: Counter | type IgnoredCollector, typ: typedesc, labelValues: Labels, body: untyped) =
+  when defined(metrics) and counter is not IgnoredCollector:
     try:
       body
     except typ:
@@ -221,51 +239,43 @@ template countExceptions*(counter: Counter, typ: typedesc, labelValues: Labels, 
   else:
     body
 
-template countExceptions*(counter: Counter, typ: typedesc, body: untyped) =
-  let labelValues: Labels = @[]
-  counter.countExceptions(typ, labelValues):
+template countExceptions*(counter: Counter | type IgnoredCollector, typ: typedesc, body: untyped) =
+  when defined(metrics) and counter is not IgnoredCollector:
+    let labelValues: Labels = @[]
+    counter.countExceptions(typ, labelValues):
+      body
+  else:
     body
 
-template countExceptions*(counter: Counter, labelValues: Labels, body: untyped) =
+template countExceptions*(counter: Counter | type IgnoredCollector, labelValues: Labels, body: untyped) =
   countExceptions(counter, Exception, labelValues, body)
 
-template countExceptions*(counter: Counter, body: untyped) =
-  let labelValues: Labels = @[]
-  counter.countExceptions(labelValues):
+template countExceptions*(counter: Counter | type IgnoredCollector, body: untyped) =
+  when defined(metrics) and counter is not IgnoredCollector:
+    let labelValues: Labels = @[]
+    counter.countExceptions(labelValues):
+      body
+  else:
     body
-
-template counter*(identifier: untyped,
-                  help: static string,
-                  labels: Labels = @[],
-                  registry = defaultRegistry) {.dirty.} =
-  when defined(metrics):
-    var identifier = newCounter(astToStr(identifier), help, labels, registry)
-  else:
-    type identifier = IgnoredCollector
-
-template publicCounter*(identifier: untyped,
-                       help: static string,
-                       labels: Labels = @[],
-                       registry = defaultRegistry) {.dirty.} =
-  when defined(metrics):
-    var identifier* = newCounter(astToStr(identifier), help, labels, registry)
-  else:
-    type identifier* = IgnoredCollector
 
 #########
 # gauge #
 #########
 
-proc newGaugeMetrics*(name: string, labels, labelValues: Labels): seq[Metric] =
-  when defined(metrics):
+when defined(metrics):
+  proc newGaugeMetrics(name: string, labels, labelValues: Labels): seq[Metric] =
     result = @[
       Metric(name: name,
             labels: labels,
             labelValues: labelValues),
     ]
 
-proc newGauge*(name: string, help: string, labels: Labels = @[], registry = defaultRegistry): Gauge =
-  when defined(metrics):
+  proc validateGaugeLabelValues(gauge: Gauge, labelValues: Labels): Labels =
+    result = validateLabelValues(gauge, labelValues)
+    if result notin gauge.metrics:
+      gauge.metrics[result] = newGaugeMetrics(gauge.name, gauge.labels, result)
+
+  proc newGaugeImpl*(name: string, help: string, labels: Labels = @[], registry = defaultRegistry): Gauge =
     result = Gauge(name: name,
                   help: help,
                   typ: "gauge",
@@ -275,11 +285,23 @@ proc newGauge*(name: string, help: string, labels: Labels = @[], registry = defa
       result.metrics[labels] = newGaugeMetrics(name, labels, labels)
     result.register(registry)
 
-proc validateGaugeLabelValues*(gauge: Gauge, labelValues: Labels): Labels =
+template newGauge*(identifier: untyped,
+                  help: static string,
+                  labels: Labels = @[],
+                  registry = defaultRegistry) {.dirty.} =
   when defined(metrics):
-    result = validateLabelValues(gauge, labelValues)
-    if result notin gauge.metrics:
-      gauge.metrics[result] = newGaugeMetrics(gauge.name, gauge.labels, result)
+    var identifier = newGaugeImpl(astToStr(identifier), help, labels, registry)
+  else:
+    type identifier = IgnoredCollector
+
+template newPublicGauge*(identifier: untyped,
+                        help: static string,
+                        labels: Labels = @[],
+                        registry = defaultRegistry) {.dirty.} =
+  when defined(metrics):
+    var identifier* = newGaugeImpl(astToStr(identifier), help, labels, registry)
+  else:
+    type identifier* = IgnoredCollector
 
 proc incGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: Labels = @[]) =
   when defined(metrics):
@@ -307,76 +329,51 @@ template inc*(gauge: Gauge, amount: int64|float64 = 1, labelValues: Labels = @[]
   when defined(metrics):
     {.gcsafe.}: incGauge(gauge, amount, labelValues)
 
-template dec*(gauge: Gauge, amount: int64|float64 = 1, labelValues: Labels = @[]) =
-  when defined(metrics):
+template dec*(gauge: Gauge | type IgnoredCollector, amount: int64|float64 = 1, labelValues: Labels = @[]) =
+  when defined(metrics) and gauge is not IgnoredCollector:
     {.gcsafe.}: decGauge(gauge, amount, labelValues)
 
-template set*(gauge: Gauge, value: int64|float64, labelValues: Labels = @[]) =
-  when defined(metrics):
+template set*(gauge: Gauge | type IgnoredCollector, value: int64|float64, labelValues: Labels = @[]) =
+  when defined(metrics) and gauge is not IgnoredCollector:
     {.gcsafe.}: setGauge(gauge, value, labelValues)
 
 # in seconds
-proc setToCurrentTime*(gauge: Gauge, labelValues: Labels = @[]) =
-  when defined(metrics):
+proc setToCurrentTime*(gauge: Gauge | type IgnoredCollector, labelValues: Labels = @[]) =
+  when defined(metrics) and gauge is not IgnoredCollector:
     gauge.set(getTime().toUnix(), labelValues)
 
-template trackInProgress*(gauge: Gauge, labelValues: Labels, body: untyped) =
-  when defined(metrics):
+template trackInProgress*(gauge: Gauge | type IgnoredCollector, labelValues: Labels, body: untyped) =
+  when defined(metrics) and gauge is not IgnoredCollector:
     gauge.inc(labelValues = labelValues)
     body
     gauge.dec(labelValues = labelValues)
   else:
     body
 
-template trackInProgress*(gauge: Gauge, body: untyped) =
-  let labelValues: Labels = @[]
-  gauge.trackInProgress(labelValues):
+template trackInProgress*(gauge: Gauge | type IgnoredCollector, body: untyped) =
+  when defined(metrics) and gauge is not IgnoredCollector:
+    let labelValues: Labels = @[]
+    gauge.trackInProgress(labelValues):
+      body
+  else:
     body
 
 # in seconds
-template time*(gauge: Gauge, labelValues: Labels, body: untyped) =
-  when defined(metrics):
+template time*(gauge: Gauge | type IgnoredCollector, labelValues: Labels, body: untyped) =
+  when defined(metrics) and gauge is not IgnoredCollector:
     let start = times.toUnix(getTime())
     body
     gauge.set(times.toUnix(getTime()) - start, labelValues = labelValues)
   else:
     body
 
-template time*(gauge: Gauge, body: untyped) =
-  let labelValues: Labels = @[]
-  gauge.time(labelValues):
+template time*(gauge: Gauge | type IgnoredCollector, body: untyped) =
+  when defined(metrics) and gauge is not IgnoredCollector:
+    let labelValues: Labels = @[]
+    gauge.time(labelValues):
+      body
+  else:
     body
-
-template gauge*(identifier: untyped,
-                help: static string,
-                labels: Labels = @[],
-                registry = defaultRegistry) {.dirty.} =
-  when defined(metrics):
-    var identifier = newGauge(astToStr(identifier), help, labels, registry)
-  else:
-    type identifier = IgnoredCollector
-
-template publicGauge*(identifier: untyped,
-                      help: static string,
-                      labels: Labels = @[],
-                      registry = defaultRegistry) {.dirty.} =
-  when defined(metrics):
-    var identifier* = newGauge(astToStr(identifier), help, labels, registry)
-  else:
-    type identifier* = IgnoredCollector
-
-#######################
-# Disabled collectors #
-#######################
-
-template inc*(gauge: type IgnoredCollector, amount: int64|float64 = 1, labelValues: Labels = @[]) =
-  discard
-
-template dec*(gauge: type IgnoredCollector, amount: int64|float64 = 1, labelValues: Labels = @[]) =
-  discard
-
-template set*(gauge: type IgnoredCollector, value: int64|float64, labelValues: Labels = @[]) =
-  discard
 
 ###############
 # HTTP server #
