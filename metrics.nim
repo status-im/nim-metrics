@@ -34,6 +34,8 @@ type
 
   RegistrationError* = object of Exception
 
+  IgnoredCollector* = object
+
 const CONTENT_TYPE* = "text/plain; version=0.0.4; charset=utf-8"
 
 #########
@@ -231,6 +233,24 @@ template countExceptions*(counter: Counter, body: untyped) =
   counter.countExceptions(labelValues):
     body
 
+template counter*(identifier: untyped,
+                  help: static string,
+                  labels: Labels = @[],
+                  registry = defaultRegistry) {.dirty.} =
+  when defined(metrics):
+    var identifier = newCounter(astToStr(identifier), help, labels, registry)
+  else:
+    type identifier = IgnoredCollector
+
+template publicCounter*(identifier: untyped,
+                       help: static string,
+                       labels: Labels = @[],
+                       registry = defaultRegistry) {.dirty.} =
+  when defined(metrics):
+    var identifier* = newCounter(astToStr(identifier), help, labels, registry)
+  else:
+    type identifier* = IgnoredCollector
+
 #########
 # gauge #
 #########
@@ -322,6 +342,37 @@ template time*(gauge: Gauge, body: untyped) =
   let labelValues: Labels = @[]
   gauge.time(labelValues):
     body
+
+template gauge*(identifier: untyped,
+                help: static string,
+                labels: Labels = @[],
+                registry = defaultRegistry) {.dirty.} =
+  when defined(metrics):
+    var identifier = newGauge(astToStr(identifier), help, labels, registry)
+  else:
+    type identifier = IgnoredCollector
+
+template publicGauge*(identifier: untyped,
+                      help: static string,
+                      labels: Labels = @[],
+                      registry = defaultRegistry) {.dirty.} =
+  when defined(metrics):
+    var identifier* = newGauge(astToStr(identifier), help, labels, registry)
+  else:
+    type identifier* = IgnoredCollector
+
+#######################
+# Disabled collectors #
+#######################
+
+template inc*(gauge: IgnoredCollector, amount: int64|float64 = 1, labelValues: Labels = @[]) =
+  discard
+
+template dec*(gauge: IgnoredCollector, amount: int64|float64 = 1, labelValues: Labels = @[]) =
+  discard
+
+template set*(gauge: IgnoredCollector, value: int64|float64, labelValues: Labels = @[]) =
+  discard
 
 ###############
 # HTTP server #

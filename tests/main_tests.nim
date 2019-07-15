@@ -8,12 +8,12 @@
 import os, strutils, unittest,
       ../metrics
 
-var globalGauge = newGauge("globalGauge", "help")
-var globaCounter = newCounter("globalCounter", "help")
+gauge   globalGauge, "help"
+counter globalCounter, "help"
 
 proc gcSafetyTest {.gcsafe.} = # The test is succesful if this proc compiles
   globalGauge.set 10.0
-  globaCounter.inc 2
+  globalCounter.inc 2
 
 suite "counter":
   setup:
