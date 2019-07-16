@@ -8,10 +8,10 @@
 import os, strutils, unittest,
       ../metrics
 
-newCounter globalCounter, "help"
-newPublicCounter globalPublicCounter, "help"
-newGauge globalGauge, "help"
-newPublicGauge globalPublicGauge, "help"
+declareCounter globalCounter, "help"
+declarePublicCounter globalPublicCounter, "help"
+declareGauge globalGauge, "help"
+declarePublicGauge globalPublicGauge, "help"
 
 proc gcSafetyTest* {.gcsafe.} = # The test is succesful if this proc compiles
   globalCounter.inc 2
@@ -24,7 +24,7 @@ proc gcSafetyTest* {.gcsafe.} = # The test is succesful if this proc compiles
 suite "counter":
   setup:
     var registry = newRegistry()
-    newCounter(counter, "help", registry = registry)
+    declareCounter counter, "help", registry = registry
 
   test "increment":
     check(counter.value == 0)
@@ -65,7 +65,7 @@ suite "counter":
     # echo counter.toTextLines().join("\n")
 
   test "labels":
-    newCounter(lcounter, "l help", @["foo", "bar"], registry)
+    declareCounter lcounter, "l help", @["foo", "bar"], registry
     expect KeyError:
       discard lcounter.value
 
@@ -81,7 +81,7 @@ suite "counter":
 suite "gauge":
   setup:
     var registry = newRegistry()
-    newGauge(gauge, "help", registry = registry)
+    declareGauge gauge, "help", registry = registry
 
   test "basic":
     check(gauge.value == 0)
@@ -101,7 +101,7 @@ suite "gauge":
       check(gauge.value == 1)
     check(gauge.value == 0)
 
-    newGauge(lgauge, "help", @["foobar"], registry = registry)
+    declareGauge lgauge, "help", @["foobar"], registry = registry
     let labelValues = @["b"]
     lgauge.trackInProgress(labelValues):
       check(lgauge.value(labelValues) == 1)
@@ -116,7 +116,7 @@ suite "gauge":
     # echo registry.toText()
 
   test "timing with labels":
-    newGauge(lgauge, "help", @["foobar"], registry = registry)
+    declareGauge lgauge, "help", @["foobar"], registry = registry
     let labelValues = @["b"]
     lgauge.time(labelValues):
       sleep(1000)

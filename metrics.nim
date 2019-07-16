@@ -183,7 +183,9 @@ when defined(metrics):
     if result notin counter.metrics:
       counter.metrics[result] = newCounterMetrics(counter.name, counter.labels, result)
 
-  proc newCounterImpl*(name: string, help: string, labels: Labels = @[], registry = defaultRegistry): Counter =
+  # don't document this one, even if we're forced to make it public, because it
+  # won't work when all (or some) collectors are disabled
+  proc newCounter*(name: string, help: string, labels: Labels = @[], registry = defaultRegistry): Counter =
     result = Counter(name: name,
                     help: help,
                     typ: "counter",
@@ -193,23 +195,23 @@ when defined(metrics):
       result.metrics[labels] = newCounterMetrics(name, labels, labels)
     result.register(registry)
 
-template newCounter*(identifier: untyped,
-                    help: static string,
-                    labels: Labels = @[],
-                    registry = defaultRegistry) {.dirty.} =
+template declareCounter*(identifier: untyped,
+                        help: static string,
+                        labels: Labels = @[],
+                        registry = defaultRegistry) {.dirty.} =
   # fine-grained collector disabling will go in here, turning disabled
   # collectors into type aliases for IgnoredCollector
   when defined(metrics):
-    var identifier = newCounterImpl(astToStr(identifier), help, labels, registry)
+    var identifier = newCounter(astToStr(identifier), help, labels, registry)
   else:
     type identifier = IgnoredCollector
 
-template newPublicCounter*(identifier: untyped,
-                           help: static string,
-                           labels: Labels = @[],
-                           registry = defaultRegistry) {.dirty.} =
+template declarePublicCounter*(identifier: untyped,
+                               help: static string,
+                               labels: Labels = @[],
+                               registry = defaultRegistry) {.dirty.} =
   when defined(metrics):
-    var identifier* = newCounterImpl(astToStr(identifier), help, labels, registry)
+    var identifier* = newCounter(astToStr(identifier), help, labels, registry)
   else:
     type identifier* = IgnoredCollector
 
@@ -275,7 +277,7 @@ when defined(metrics):
     if result notin gauge.metrics:
       gauge.metrics[result] = newGaugeMetrics(gauge.name, gauge.labels, result)
 
-  proc newGaugeImpl*(name: string, help: string, labels: Labels = @[], registry = defaultRegistry): Gauge =
+  proc newGauge*(name: string, help: string, labels: Labels = @[], registry = defaultRegistry): Gauge =
     result = Gauge(name: name,
                   help: help,
                   typ: "gauge",
@@ -285,21 +287,21 @@ when defined(metrics):
       result.metrics[labels] = newGaugeMetrics(name, labels, labels)
     result.register(registry)
 
-template newGauge*(identifier: untyped,
-                  help: static string,
-                  labels: Labels = @[],
-                  registry = defaultRegistry) {.dirty.} =
+template declareGauge*(identifier: untyped,
+                      help: static string,
+                      labels: Labels = @[],
+                      registry = defaultRegistry) {.dirty.} =
   when defined(metrics):
-    var identifier = newGaugeImpl(astToStr(identifier), help, labels, registry)
+    var identifier = newGauge(astToStr(identifier), help, labels, registry)
   else:
     type identifier = IgnoredCollector
 
-template newPublicGauge*(identifier: untyped,
-                        help: static string,
-                        labels: Labels = @[],
-                        registry = defaultRegistry) {.dirty.} =
+template declarePublicGauge*(identifier: untyped,
+                            help: static string,
+                            labels: Labels = @[],
+                            registry = defaultRegistry) {.dirty.} =
   when defined(metrics):
-    var identifier* = newGaugeImpl(astToStr(identifier), help, labels, registry)
+    var identifier* = newGauge(astToStr(identifier), help, labels, registry)
   else:
     type identifier* = IgnoredCollector
 
