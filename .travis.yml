@@ -20,8 +20,10 @@ install:
   - curl -O -L -s -S https://raw.githubusercontent.com/status-im/nimbus/devel/build_nim.sh
   - env MAKE="make -j2" bash build_nim.sh Nim csources dist/nimble NimBinaries
   - export PATH=$PWD/Nim/bin:$PATH
+  - nimble install -y
+  - nimble install chronicles -y
 
 script:
-  - nimble install -y
   - nimble test
+  - nimble test_chronicles
 

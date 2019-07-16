@@ -31,9 +31,11 @@ install:
 build_script:
   - cd C:\projects\%APPVEYOR_PROJECT_SLUG%
   - nimble install -y
+  - nimble install chronicles -y
 
 test_script:
   - nimble test
+  - nimble test_chronicles
 
 deploy: off
 

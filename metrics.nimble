@@ -26,10 +26,14 @@ proc bench(name: string) =
   buildBinary name, "benchmarks/", "-f -r -d:metrics -d:release"
 
 ### tasks
-task test, "Run tests":
+task test, "Main tests":
   # build it with metrics disabled, first
-  buildBinary "all_tests", "tests/", "-f"
-  test "all_tests"
+  buildBinary "main_tests", "tests/", "-f"
+  test "main_tests"
+
+task test_chronicles, "Chronicles tests":
+  buildBinary "chronicles_tests", "tests/", "-f"
+  test "chronicles_tests"
 
 task benchmark, "Run benchmarks":
   bench "bench_collectors"
