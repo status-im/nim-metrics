@@ -4,18 +4,16 @@ import
 proc main(nb_samples: Natural) =
   warmup()
 
-  var counter1: Counter
-  bench("create a counter and increment it 3 times with different values", counter1.value):
-    counter1 = newCounter("counter1", "help")
+  bench("create a counter and increment it 3 times with different values", 0):
+    declareCounter counter1, "help"
     counter1.inc()
     counter1.inc(2)
     counter1.inc(2.1)
     counter1.unregister()
 
-  var counter2: Counter
   let labelValues = @["a", "b"]
-  bench("create a counter with 2 labels and increment it 3 times with different values", counter2.value(labelValues)):
-    counter2 = newCounter("counter2", "help", @["foo", "bar"])
+  bench("create a counter with 2 labels and increment it 3 times with different values", 0):
+    declareCounter counter2, "help", @["foo", "bar"]
     counter2.inc(labelValues = labelValues)
     counter2.inc(2, labelValues)
     counter2.inc(2.1, labelValues)
