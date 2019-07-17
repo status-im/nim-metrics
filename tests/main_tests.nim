@@ -112,7 +112,7 @@ suite "gauge":
     gauge.time:
       sleep(1000)
       check(gauge.value == 0)
-    check(gauge.value == 1)
+    check(gauge.value >= 1) # may be 2 inside a macOS Travis job
     # echo registry.toText()
 
   test "timing with labels":
@@ -120,5 +120,5 @@ suite "gauge":
     let labelValues = @["b"]
     lgauge.time(labelValues):
       sleep(1000)
-    check(lgauge.value(labelValues) == 1)
+    check(lgauge.value(labelValues) >= 1)
 

@@ -24,6 +24,7 @@ type
     typ*: string
     labels*: Labels
     metrics*: Metrics
+    creationThreadId*: int
 
   IgnoredCollector* = object
 
@@ -88,9 +89,13 @@ when defined(metrics):
     if labelValues == @[]:
       result = collector.getEmptyLabelValues()
     elif len(labelValues) != len(collector.labels):
-      raise newException(ValueError, "number of label values doesn't match number of labels")
+      raise newException(ValueError, "The number of label values doesn't match the number of labels.")
     else:
       result = labelValues
+
+    # avoid having to change another thread's heap
+    if result notin collector.metrics and collector.creationThreadId != getThreadId():
+      raise newException(AccessViolationError, "Adding a new combination of label values from another thread than the one in which the collector was created is not allowed.")
 
   method hash*(collector: Collector): Hash {.base.} =
     result = result !& collector.name.hash
@@ -190,7 +195,8 @@ when defined(metrics):
                     help: help,
                     typ: "counter",
                     labels: labels,
-                    metrics: initOrderedTable[Labels, seq[Metric]]())
+                    metrics: initOrderedTable[Labels, seq[Metric]](),
+                    creationThreadId: getThreadId())
     if labels.len == 0:
       result.metrics[labels] = newCounterMetrics(name, labels, labels)
     result.register(registry)
@@ -220,7 +226,7 @@ proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels
     var timestamp = getTime().toMilliseconds()
 
     if amount < 0:
-      raise newException(ValueError, "inc() cannot be used with negative amounts")
+      raise newException(ValueError, "Counter.inc() cannot be used with negative amounts.")
 
     let labelValuesCopy = validateCounterLabelValues(counter, labelValues)
 
@@ -282,7 +288,8 @@ when defined(metrics):
                   help: help,
                   typ: "gauge",
                   labels: labels,
-                  metrics: initOrderedTable[Labels, seq[Metric]]())
+                  metrics: initOrderedTable[Labels, seq[Metric]](),
+                  creationThreadId: getThreadId())
     if labels.len == 0:
       result.metrics[labels] = newGaugeMetrics(name, labels, labels)
     result.register(registry)
