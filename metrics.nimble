@@ -30,6 +30,8 @@ task test, "Main tests":
   # build it with metrics disabled, first
   buildBinary "main_tests", "tests/", "-f"
   test "main_tests"
+  buildBinary "bench_collectors", "benchmarks/", "-f"
+  buildBinary "bench_collectors", "benchmarks/", "-f -d:metrics"
 
 task test_chronicles, "Chronicles tests":
   buildBinary "chronicles_tests", "tests/", "-f"

@@ -34,6 +34,11 @@ type
   Registry* = ref object of RootObj
     lock*: Lock
     collectors*: OrderedSet[Collector]
+    # Only used by the secondary API to retrieve collectors by name. No need to
+    # distinguish between collectors with the same name and different labels,
+    # here. We'll just return the last registered collector with that name for
+    # something like `counter("foo_bar")`.
+    collectorsByName*: Table[string, Collector]
 
   RegistrationError* = object of Exception
 
@@ -131,6 +136,7 @@ proc newRegistry*(): Registry =
     result.lock.initLock()
     # TODO: remove this set initialisation after porting to Nim-0.20.x
     result.collectors.init()
+    result.collectorsByName = initTable[string, Collector]()
 
 var defaultRegistry* = newRegistry()
 
@@ -141,6 +147,7 @@ proc register*(collector: Collector, registry = defaultRegistry) =
         raise newException(RegistrationError, "Collector already registered.")
 
       registry.collectors.incl(collector)
+      registry.collectorsByName[collector.name] = collector
 
 proc unregister*(collector: Collector, registry = defaultRegistry) =
   when defined(metrics):
@@ -149,6 +156,7 @@ proc unregister*(collector: Collector, registry = defaultRegistry) =
         raise newException(RegistrationError, "Collector not registered.")
 
       registry.collectors.excl(collector)
+      registry.collectorsByName.del(collector.name)
 
 proc collect*(registry: Registry): OrderedTable[Collector, Metrics] =
   when defined(metrics):
@@ -220,6 +228,17 @@ template declarePublicCounter*(identifier: untyped,
     var identifier* = newCounter(astToStr(identifier), help, labels, registry)
   else:
     type identifier* = IgnoredCollector
+
+# alternative API
+proc counter*(name: string, labels: Labels = @[], registry = defaultRegistry): Counter | IgnoredCollector =
+  when defined(metrics):
+    # TODO: return IgnoredCollector when fine-grained filtering is enabled and
+    # `name` matches the excluded pattern
+    if name in registry.collectorsByName:
+      result = registry.collectorsByName[name].Counter
+    else:
+      # no support for custom help strings in this API
+      result = newCounter(name, "", labels, registry)
 
 proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels = @[]) =
   when defined(metrics):
@@ -302,6 +321,15 @@ template declareGauge*(identifier: untyped,
     var identifier = newGauge(astToStr(identifier), help, labels, registry)
   else:
     type identifier = IgnoredCollector
+
+# alternative API
+proc gauge*(name: string, labels: Labels = @[], registry = defaultRegistry): Gauge | IgnoredCollector =
+  when defined(metrics):
+    if name in registry.collectorsByName:
+      result = registry.collectorsByName[name].Gauge
+    else:
+      # no support for custom help strings in this API
+      result = newGauge(name, "", labels, registry)
 
 template declarePublicGauge*(identifier: untyped,
                             help: static string,
