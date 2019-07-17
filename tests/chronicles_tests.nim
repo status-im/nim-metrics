@@ -11,16 +11,16 @@ import chronicles, tables, unittest,
 suite "logging":
   test "info":
     var registry = newRegistry()
-    declareCounter counter, "help", registry = registry
-    counter.inc()
-    info "counter", counter
-    declareCounter lcounter, "l help", @["foo", "bar"], registry
+    declareCounter myCounter, "help", registry = registry
+    myCounter.inc()
+    info "myCounter", myCounter
+    declareCounter lCounter, "l help", @["foo", "bar"], registry
     let labelValues = @["a", "x \"y\" \n\\z"]
-    lcounter.inc(4.5, labelValues = labelValues)
-    info "lcounter", lcounter
-    declareGauge gauge, "help", registry = registry
-    gauge.set(9.5)
-    info "gauge", gauge
+    lCounter.inc(4.5, labelValues = labelValues)
+    info "lCounter", lCounter
+    declareGauge myGauge, "help", registry = registry
+    myGauge.set(9.5)
+    info "myGauge", myGauge
     when defined(metrics):
       for collector, metricsTable in registry.collect():
         for labels, metrics in metricsTable:

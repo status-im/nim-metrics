@@ -24,18 +24,32 @@ proc gcSafetyTest* {.gcsafe.} = # The test is succesful if this proc compiles
 suite "counter":
   setup:
     var registry = newRegistry()
-    declareCounter counter, "help", registry = registry
+    declareCounter myCounter, "help", registry = registry
 
   test "increment":
-    check(counter.value == 0)
-    counter.inc()
-    check(counter.value == 1)
-    counter.inc(7)
-    check(counter.value == 8)
-    counter.inc(0.5)
-    check(counter.value == 8.5)
+    check(myCounter.value == 0)
+    myCounter.inc()
+    check(myCounter.value == 1)
+    myCounter.inc(7)
+    check(myCounter.value == 8)
+    myCounter.inc(0.5)
+    check(myCounter.value == 8.5)
     expect ValueError:
-      counter.inc(-1)
+      myCounter.inc(-1)
+
+    # alternative API
+    counter("myCounter", registry = registry).inc()
+    check(counter("myCounter", registry = registry).value == 9.5)
+    check(myCounter.value == 9.5)
+    counter("myNewCounter", registry = registry).inc()
+    check(counter("myNewCounter", registry = registry).value == 1)
+    # default registry
+    counter("foo_bar").inc()
+    check(counter("foo_bar").value == 1)
+    counter("foo_bar").inc(0.5)
+    check(counter("foo_bar").value == 1.5)
+    expect ObjectConversionError:
+      gauge("foo_bar").inc()
 
   test "exceptions":
     proc f(switch: bool) =
@@ -45,61 +59,62 @@ suite "counter":
         raise newException(IndexError, "exc2")
 
     expect IndexError:
-      counter.countExceptions(ValueError):
+      myCounter.countExceptions(ValueError):
         f(false)
-    check(counter.value == 0)
+    check(myCounter.value == 0)
 
     expect ValueError:
-      counter.countExceptions(ValueError):
+      myCounter.countExceptions(ValueError):
         f(true)
-    check(counter.value == 1)
+    check(myCounter.value == 1)
 
     expect IndexError:
-      counter.countExceptions:
+      myCounter.countExceptions:
         f(false)
-    check(counter.value == 2)
+    check(myCounter.value == 2)
 
-    counter.countExceptions:
+    myCounter.countExceptions:
       discard
-    check(counter.value == 2)
-    # echo counter.toTextLines().join("\n")
+    check(myCounter.value == 2)
+    # echo myCounter.toTextLines().join("\n")
 
   test "labels":
-    declareCounter lcounter, "l help", @["foo", "bar"], registry
+    declareCounter lCounter, "l help", @["foo", "bar"], registry
     expect KeyError:
-      discard lcounter.value
+      discard lCounter.value
 
     # you can't access a labelled value before it was initialised
     expect KeyError:
-      discard lcounter.value(@["a", "x"])
+      discard lCounter.value(@["a", "x"])
 
     let labelValues = @["a", "x \"y\" \n\\z"]
-    lcounter.inc(labelValues = labelValues)
-    check(lcounter.value(labelValues) == 1)
+    lCounter.inc(labelValues = labelValues)
+    check(lCounter.value(labelValues) == 1)
     # echo registry.toText()
 
 suite "gauge":
   setup:
     var registry = newRegistry()
-    declareGauge gauge, "help", registry = registry
+    declareGauge myGauge, "help", registry = registry
 
   test "basic":
-    check(gauge.value == 0)
-    gauge.inc()
-    check(gauge.value == 1)
-    gauge.dec(3)
-    check(gauge.value == -2.0) # weird Nim bug if it's "-2"
-    gauge.dec(0.1)
-    check(gauge.value == -2.1)
-    gauge.set(9.5)
-    check(gauge.value == 9.5)
-    gauge.set(1)
-    check(gauge.value == 1)
+    check(myGauge.value == 0)
+    myGauge.inc()
+    check(myGauge.value == 1)
+    myGauge.dec(3)
+    check(myGauge.value == -2.0) # weird Nim bug if it's "-2"
+    myGauge.dec(0.1)
+    check(myGauge.value == -2.1)
+    myGauge.set(9.5)
+    check(myGauge.value == 9.5)
+    myGauge.set(1)
+    check(myGauge.value == 1)
+    check(gauge("myGauge", registry = registry).value == 1)
 
   test "in progress":
-    gauge.trackInProgress:
-      check(gauge.value == 1)
-    check(gauge.value == 0)
+    myGauge.trackInProgress:
+      check(myGauge.value == 1)
+    check(myGauge.value == 0)
 
     declareGauge lgauge, "help", @["foobar"], registry = registry
     let labelValues = @["b"]
@@ -109,10 +124,10 @@ suite "gauge":
     # echo registry.toText()
 
   test "timing":
-    gauge.time:
+    myGauge.time:
       sleep(1000)
-      check(gauge.value == 0)
-    check(gauge.value >= 1) # may be 2 inside a macOS Travis job
+      check(myGauge.value == 0)
+    check(myGauge.value >= 1) # may be 2 inside a macOS Travis job
     # echo registry.toText()
 
   test "timing with labels":
