@@ -149,8 +149,8 @@ proc register*(collector: Collector, registry = defaultRegistry) =
       registry.collectors.incl(collector)
       registry.collectorsByName[collector.name] = collector
 
-proc unregister*(collector: Collector, registry = defaultRegistry) =
-  when defined(metrics):
+proc unregister*(collector: Collector | type IgnoredCollector, registry = defaultRegistry) =
+  when defined(metrics) and counter is not IgnoredCollector:
     withLock registry.lock:
       if collector notin registry.collectors:
         raise newException(RegistrationError, "Collector not registered.")
@@ -230,10 +230,8 @@ template declarePublicCounter*(identifier: untyped,
     type identifier* = IgnoredCollector
 
 # alternative API
-proc counter*(name: string, labels: Labels = @[], registry = defaultRegistry): Counter | IgnoredCollector =
+proc counter*(name: string, labels: Labels = @[], registry = defaultRegistry): Counter =
   when defined(metrics):
-    # TODO: return IgnoredCollector when fine-grained filtering is enabled and
-    # `name` matches the excluded pattern
     if name in registry.collectorsByName:
       result = registry.collectorsByName[name].Counter
     else:
@@ -323,7 +321,7 @@ template declareGauge*(identifier: untyped,
     type identifier = IgnoredCollector
 
 # alternative API
-proc gauge*(name: string, labels: Labels = @[], registry = defaultRegistry): Gauge | IgnoredCollector =
+proc gauge*(name: string, labels: Labels = @[], registry = defaultRegistry): Gauge =
   when defined(metrics):
     if name in registry.collectorsByName:
       result = registry.collectorsByName[name].Gauge
