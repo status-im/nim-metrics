@@ -225,15 +225,16 @@ template declarePublicCounter*(identifier: untyped,
 #- alternative API (without support for custom help strings, labels or custom registries)
 #- different collector types with the same names are allowed
 #- don't mark this proc as {.inline.} because it's incompatible with {.global.}: https://github.com/status-im/nim-metrics/pull/5#discussion_r304687474
-proc counter*(name: static string): Counter | type IgnoredCollector =
-  when defined(metrics):
+when defined(metrics):
+  proc counter*(name: static string): Counter =
     # This {.global.} var assignment is lifted from the procedure and placed in a
     # special module init section that's guaranteed to run only once per program.
     # Calls to this proc will just return the globally initialised variable.
     var res {.global.} = newCounter(name, "")
     return res
-  else:
-    return IgnoredCollector
+else:
+  template counter*(name: static string): untyped =
+    IgnoredCollector
 
 proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels = @[]) =
   when defined(metrics):
@@ -318,12 +319,13 @@ template declareGauge*(identifier: untyped,
     type identifier = IgnoredCollector
 
 # alternative API
-proc gauge*(name: static string): Gauge | type IgnoredCollector =
-  when defined(metrics):
+when defined(metrics):
+  proc gauge*(name: static string): Gauge =
     var res {.global.} = newGauge(name, "") # lifted line
     return res
-  else:
-    return IgnoredCollector
+else:
+  template gauge*(name: static string): untyped =
+    IgnoredCollector
 
 template declarePublicGauge*(identifier: untyped,
                             help: static string,
