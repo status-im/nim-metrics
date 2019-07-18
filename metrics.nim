@@ -34,11 +34,6 @@ type
   Registry* = ref object of RootObj
     lock*: Lock
     collectors*: OrderedSet[Collector]
-    # Only used by the secondary API to retrieve collectors by name. No need to
-    # distinguish between collectors with the same name and different labels,
-    # here. We'll just return the last registered collector with that name for
-    # something like `counter("foo_bar")`.
-    collectorsByName*: Table[string, Collector]
 
   RegistrationError* = object of Exception
 
@@ -136,9 +131,9 @@ proc newRegistry*(): Registry =
     result.lock.initLock()
     # TODO: remove this set initialisation after porting to Nim-0.20.x
     result.collectors.init()
-    result.collectorsByName = initTable[string, Collector]()
 
-var defaultRegistry* = newRegistry()
+# needs to be {.global.} because of the alternative API's usage of {.global.} collector vars
+var defaultRegistry* {.global.} = newRegistry()
 
 proc register*(collector: Collector, registry = defaultRegistry) =
   when defined(metrics):
@@ -147,16 +142,14 @@ proc register*(collector: Collector, registry = defaultRegistry) =
         raise newException(RegistrationError, "Collector already registered.")
 
       registry.collectors.incl(collector)
-      registry.collectorsByName[collector.name] = collector
 
 proc unregister*(collector: Collector | type IgnoredCollector, registry = defaultRegistry) =
-  when defined(metrics) and counter is not IgnoredCollector:
+  when defined(metrics) and collector is not IgnoredCollector:
     withLock registry.lock:
       if collector notin registry.collectors:
         raise newException(RegistrationError, "Collector not registered.")
 
       registry.collectors.excl(collector)
-      registry.collectorsByName.del(collector.name)
 
 proc collect*(registry: Registry): OrderedTable[Collector, Metrics] =
   when defined(metrics):
@@ -229,14 +222,18 @@ template declarePublicCounter*(identifier: untyped,
   else:
     type identifier* = IgnoredCollector
 
-# alternative API
-proc counter*(name: string, labels: Labels = @[], registry = defaultRegistry): Counter =
+#- alternative API (without support for custom help strings, labels or custom registries)
+#- different collector types with the same names are allowed
+#- don't mark this proc as {.inline.} because it's incompatible with {.global.}: https://github.com/status-im/nim-metrics/pull/5#discussion_r304687474
+proc counter*(name: static string): Counter | type IgnoredCollector =
   when defined(metrics):
-    if name in registry.collectorsByName:
-      result = registry.collectorsByName[name].Counter
-    else:
-      # no support for custom help strings in this API
-      result = newCounter(name, "", labels, registry)
+    # This {.global.} var assignment is lifted from the procedure and placed in a
+    # special module init section that's guaranteed to run only once per program.
+    # Calls to this proc will just return the globally initialised variable.
+    var res {.global.} = newCounter(name, "")
+    return res
+  else:
+    return IgnoredCollector
 
 proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels = @[]) =
   when defined(metrics):
@@ -321,13 +318,12 @@ template declareGauge*(identifier: untyped,
     type identifier = IgnoredCollector
 
 # alternative API
-proc gauge*(name: string, labels: Labels = @[], registry = defaultRegistry): Gauge =
+proc gauge*(name: static string): Gauge | type IgnoredCollector =
   when defined(metrics):
-    if name in registry.collectorsByName:
-      result = registry.collectorsByName[name].Gauge
-    else:
-      # no support for custom help strings in this API
-      result = newGauge(name, "", labels, registry)
+    var res {.global.} = newGauge(name, "") # lifted line
+    return res
+  else:
+    return IgnoredCollector
 
 template declarePublicGauge*(identifier: untyped,
                             help: static string,

@@ -37,19 +37,13 @@ suite "counter":
     expect ValueError:
       myCounter.inc(-1)
 
-    # alternative API
-    counter("myCounter", registry = registry).inc()
-    check(counter("myCounter", registry = registry).value == 9.5)
-    check(myCounter.value == 9.5)
-    counter("myNewCounter", registry = registry).inc()
-    check(counter("myNewCounter", registry = registry).value == 1)
-    # default registry
-    counter("foo_bar").inc()
-    check(counter("foo_bar").value == 1)
-    counter("foo_bar").inc(0.5)
-    check(counter("foo_bar").value == 1.5)
-    expect ObjectConversionError:
-      gauge("foo_bar").inc()
+  test "alternative API":
+    counter("one_off_counter").inc()
+    check(counter("one_off_counter").value == 1)
+    counter("one_off_counter").inc(0.5)
+    check(counter("one_off_counter").value == 1.5)
+    # confusing, but allowed
+    check gauge("one_off_counter").value == 0
 
   test "exceptions":
     proc f(switch: bool) =
@@ -109,7 +103,12 @@ suite "gauge":
     check(myGauge.value == 9.5)
     myGauge.set(1)
     check(myGauge.value == 1)
-    check(gauge("myGauge", registry = registry).value == 1)
+
+  test "alternative API":
+    gauge("one_off_gauge").set(1)
+    check(gauge("one_off_gauge").value == 1)
+    gauge("one_off_gauge").inc(0.5)
+    check(gauge("one_off_gauge").value == 1.5)
 
   test "in progress":
     myGauge.trackInProgress:
