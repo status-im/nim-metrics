@@ -26,7 +26,7 @@ suite "counter":
     var registry = newRegistry()
     declareCounter myCounter, "help", registry = registry
 
-  test "increment":
+  test "basic":
     check(myCounter.value == 0)
     myCounter.inc()
     check(myCounter.value == 1)
@@ -36,6 +36,10 @@ suite "counter":
     check(myCounter.value == 8.5)
     expect ValueError:
       myCounter.inc(-1)
+    # name validation (have to use the internal API to get past Nim's identifier validation)
+    when defined(metrics):
+      expect ValueError:
+        var tmp = newCounter("1337", "invalid name")
 
   test "alternative API":
     counter("one_off_counter").inc()
@@ -85,6 +89,12 @@ suite "counter":
     lCounter.inc(labelValues = labelValues)
     check(lCounter.value(labelValues) == 1)
     # echo registry.toText()
+
+    # label validation
+    expect ValueError:
+      declareCounter invalid1, "invalid", @["123", "foo"]
+    expect ValueError:
+      declareCounter invalid2, "invalid", @["foo", "123"]
 
 suite "gauge":
   setup:
