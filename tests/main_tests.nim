@@ -95,6 +95,14 @@ suite "counter":
       declareCounter invalid1, "invalid", @["123", "foo"]
     expect ValueError:
       declareCounter invalid2, "invalid", @["foo", "123"]
+    expect ValueError:
+      declareCounter invalid3, "invalid", @["foo", "__bar"]
+
+    # label names: array instead of sequence
+    declareCounter lCounter2, "l2 help", ["foo", "bar"], registry
+    let labelValues2 = ["a", "x \"y\" \n\\z"]
+    lCounter2.inc(labelValues = labelValues2)
+    check(lCounter2.value(labelValues2) == 1)
 
 suite "gauge":
   setup:
