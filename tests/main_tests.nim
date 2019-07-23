@@ -154,3 +154,31 @@ suite "gauge":
       sleep(1000)
     check(lgauge.value(labelValues) >= 1)
 
+suite "summary":
+  setup:
+    var registry = newRegistry()
+    declareSummary mySummary, "help", registry = registry
+
+  test "basic":
+    check mySummary.valueByName("mySummary_count") == 0
+    check mySummary.valueByName("mySummary_sum") == 0
+    mySummary.observe(10)
+    check mySummary.valueByName("mySummary_count") == 1
+    check mySummary.valueByName("mySummary_sum") == 10
+    mySummary.observe(0.5)
+    check mySummary.valueByName("mySummary_count") == 2
+    check mySummary.valueByName("mySummary_sum") == 10.5
+
+  test "timing":
+    mySummary.time:
+      sleep(1000)
+      check(mySummary.valueByName("mySummary_sum") == 0)
+    check(mySummary.valueByName("mySummary_sum") >= 1)
+
+  test "timing with labels":
+    declareSummary lsummary, "help", ["foobar"], registry = registry
+    let labelValues = ["b"]
+    lsummary.time(labelValues):
+      sleep(1000)
+    check(lsummary.valueByName("lsummary_sum", labelValues) >= 1)
+
