@@ -4,7 +4,7 @@
 #   * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import hashes, locks, sequtils, sets, strutils, tables, times
+import hashes, locks, re, sequtils, sets, strutils, tables, times
 
 type
   Labels* = seq[string]
@@ -76,6 +76,22 @@ when defined(metrics):
     result.add(" " & $metric.value)
     if showTimestamp and metric.timestamp > 0:
       result.add(" " & $metric.timestamp)
+
+  let
+    # these have to be {.global.} for the validation to work with the alternative API
+    nameRegexStr {.global.} = r"^[a-zA-Z_:][a-zA-Z0-9_:]*$"
+    nameRegex {.global.} = re(nameRegexStr)
+    labelRegexStr {.global.} = r"^[a-zA-Z_][a-zA-Z0-9_]*$"
+    labelRegex {.global.} = re(labelRegexStr)
+
+  proc validateName(name: string) =
+    if not name.contains(nameRegex):
+      raise newException(ValueError, "Invalid name: '" & name & "'. It should match the regex: " & nameRegexStr)
+
+  proc validateLabels(labels: Labels) =
+    for label in labels:
+      if not label.contains(labelRegex):
+        raise newException(ValueError, "Invalid label: '" & label & "'. It should match the regex: " & labelRegexStr)
 
 ######################
 # generic collectors #
@@ -192,6 +208,8 @@ when defined(metrics):
   # don't document this one, even if we're forced to make it public, because it
   # won't work when all (or some) collectors are disabled
   proc newCounter*(name: string, help: string, labels: Labels = @[], registry = defaultRegistry): Counter =
+    validateName(name)
+    validateLabels(labels)
     result = Counter(name: name,
                     help: help,
                     typ: "counter",
@@ -299,6 +317,8 @@ when defined(metrics):
       gauge.metrics[result] = newGaugeMetrics(gauge.name, gauge.labels, result)
 
   proc newGauge*(name: string, help: string, labels: Labels = @[], registry = defaultRegistry): Gauge =
+    validateName(name)
+    validateLabels(labels)
     result = Gauge(name: name,
                   help: help,
                   typ: "gauge",

@@ -3,6 +3,7 @@ version: '{build}'
 image: Visual Studio 2015
 
 cache:
+  - dlls.zip -> .appveyor.yml
   - NimBinaries
 
 matrix:
@@ -21,12 +22,17 @@ install:
   - IF "%PLATFORM%" == "x86" SET PATH=C:\mingw-w64\i686-6.3.0-posix-dwarf-rt_v5-rev1\mingw32\bin;%PATH%
   - IF "%PLATFORM%" == "x64" SET PATH=C:\mingw-w64\x86_64-8.1.0-posix-seh-rt_v6-rev0\mingw64\bin;%PATH%
 
+  # unpack other DLLs
+  - MKDIR %CD%\bin
+  - IF not exist "dlls.zip" appveyor DownloadFile "https://nim-lang.org/download/dlls.zip" -FileName "dlls.zip"
+  - 7z x -y -o%CD%\bin "dlls.zip" > nul
+
   # build nim from our own branch - this to avoid the day-to-day churn and
   # regressions of the fast-paced Nim development while maintaining the
   # flexibility to apply patches
   - curl -O -L -s -S https://raw.githubusercontent.com/status-im/nimbus/devel/build_nim.sh
   - env MAKE="mingw32-make -j2" ARCH_OVERRIDE=%PLATFORM% bash build_nim.sh Nim csources dist/nimble NimBinaries
-  - SET PATH=%CD%\Nim\bin;%PATH%
+  - SET PATH=%CD%\bin;%CD%\Nim\bin;%PATH%
 
 build_script:
   - cd C:\projects\%APPVEYOR_PROJECT_SLUG%
