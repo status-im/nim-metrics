@@ -31,6 +31,7 @@ type
 
   Counter* = ref object of Collector
   Gauge* = ref object of Collector
+  Summary* = ref object of Collector
 
   Registry* = ref object of RootObj
     lock*: Lock
@@ -136,11 +137,20 @@ when defined(metrics):
       for metric in metrics:
         result.add(metric.toText())
 
+# for testing
 template value*(collector: Collector | type IgnoredCollector, labelValues: LabelsParam = @[]): float64 =
   when defined(metrics) and collector is not IgnoredCollector:
     collector.metrics[@labelValues][0].value
   else:
     0.0
+
+# for testing
+proc valueByName*(collector: Collector | type IgnoredCollector, metricName: string, labelValues: LabelsParam = @[]): float64 =
+  when defined(metrics) and collector is not IgnoredCollector:
+    for metric in collector.metrics[@labelValues]:
+      if metric.name == metricName:
+        return metric.value
+    raise newException(KeyError, "No such metric name for this collector: '" & metricName & "'.")
 
 ############
 # registry #
@@ -429,6 +439,105 @@ template time*(gauge: Gauge | type IgnoredCollector, body: untyped) =
   when defined(metrics) and gauge is not IgnoredCollector:
     let labelValues: Labels = @[]
     gauge.time(labelValues):
+      body
+  else:
+    body
+
+###########
+# summary #
+###########
+
+when defined(metrics):
+  proc newSummaryMetrics(name: string, labels, labelValues: LabelsParam): seq[Metric] =
+    result = @[
+      Metric(name: name & "_sum",
+            labels: @labels,
+            labelValues: @labelValues),
+      Metric(name: name & "_count",
+            labels: @labels,
+            labelValues: @labelValues),
+      Metric(name: name & "_created",
+            labels: @labels,
+            labelValues: @labelValues,
+            value: getTime().toMilliseconds().float64),
+    ]
+
+  proc validateSummaryLabelValues(summary: Summary, labelValues: LabelsParam): Labels =
+    result = validateLabelValues(summary, labelValues)
+    if result notin summary.metrics:
+      summary.metrics[result] = newSummaryMetrics(summary.name, summary.labels, result)
+
+  proc newSummary*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry): Summary =
+    validateName(name)
+    validateLabels(labels, invalidLabelNames = ["quantile"])
+    result = Summary(name: name,
+                    help: help,
+                    typ: "summary",
+                    labels: @labels,
+                    metrics: initOrderedTable[Labels, seq[Metric]](),
+                    creationThreadId: getThreadId())
+    if labels.len == 0:
+      result.metrics[@labels] = newSummaryMetrics(name, labels, labels)
+    result.register(registry)
+
+template declareSummary*(identifier: untyped,
+                        help: static string,
+                        labels: LabelsParam = @[],
+                        registry = defaultRegistry) {.dirty.} =
+  when defined(metrics):
+    var identifier = newSummary(astToStr(identifier), help, labels, registry)
+  else:
+    type identifier = IgnoredCollector
+
+template declarePublicSummary*(identifier: untyped,
+                               help: static string,
+                               labels: LabelsParam = @[],
+                               registry = defaultRegistry) {.dirty.} =
+  when defined(metrics):
+    var identifier* = newSummary(astToStr(identifier), help, labels, registry)
+  else:
+    type identifier* = IgnoredCollector
+
+when defined(metrics):
+  proc summary*(name: static string): Summary =
+    # This {.global.} var assignment is lifted from the procedure and placed in a
+    # special module init section that's guaranteed to run only once per program.
+    # Calls to this proc will just return the globally initialised variable.
+    var res {.global.} = newSummary(name, "")
+    return res
+else:
+  template summary*(name: static string): untyped =
+    IgnoredCollector
+
+proc observeSummary(summary: Summary, amount: int64|float64, labelValues: LabelsParam = @[]) =
+  when defined(metrics):
+    var timestamp = getTime().toMilliseconds()
+
+    let labelValuesCopy = validateSummaryLabelValues(summary, labelValues)
+
+    atomicAdd(summary.metrics[labelValuesCopy][0].value.addr, amount.float64) # _sum
+    atomicStore(cast[ptr int64](summary.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+    atomicAdd(summary.metrics[labelValuesCopy][1].value.addr, 1.float64) # _count
+    atomicStore(cast[ptr int64](summary.metrics[labelValuesCopy][1].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+
+template observe*(summary: Summary | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
+  when defined(metrics) and summary is not IgnoredCollector:
+    {.gcsafe.}: observeSummary(summary, amount, labelValues)
+
+# in seconds
+# the "type IgnoredCollector" case is covered by Gauge.time()
+template time*(summary: Summary, labelValues: LabelsParam, body: untyped) =
+  when defined(metrics):
+    let start = times.toUnix(getTime())
+    body
+    summary.observe(times.toUnix(getTime()) - start, labelValues = labelValues)
+  else:
+    body
+
+template time*(summary: Summary, body: untyped) =
+  when defined(metrics):
+    let labelValues: Labels = @[]
+    summary.time(labelValues):
       body
   else:
     body
