@@ -31,6 +31,18 @@ when defined(metrics):
   formatIt(Gauge):
     it.toLog
 
+  proc toLog(c: Summary): auto =
+    Collector(c).toLog()
+
+  formatIt(Summary):
+    it.toLog
+
+  proc toLog(c: Histogram): auto =
+    Collector(c).toLog()
+
+  formatIt(Histogram):
+    it.toLog
+
   proc toLog(registry: Registry): seq[seq[string]] =
     result = @[]
     {.gcsafe.}:
@@ -52,6 +64,12 @@ else:
     "metrics disabled"
 
   formatIt(Gauge):
+    "metrics disabled"
+
+  formatIt(Summary):
+    "metrics disabled"
+
+  formatIt(Histogram):
     "metrics disabled"
 
   formatIt(Registry):
