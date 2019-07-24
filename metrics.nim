@@ -8,6 +8,7 @@ import hashes, locks, re, sequtils, sets, strutils, tables, times
 
 type
   Labels* = seq[string]
+  LabelsParam* = openArray[string]
 
   Metric* = ref object of RootObj
     name*: string
@@ -88,10 +89,14 @@ when defined(metrics):
     if not name.contains(nameRegex):
       raise newException(ValueError, "Invalid name: '" & name & "'. It should match the regex: " & nameRegexStr)
 
-  proc validateLabels(labels: Labels) =
+  proc validateLabels(labels: LabelsParam, invalidLabelNames: openArray[string] = []) =
     for label in labels:
       if not label.contains(labelRegex):
-        raise newException(ValueError, "Invalid label: '" & label & "'. It should match the regex: " & labelRegexStr)
+        raise newException(ValueError, "Invalid label: '" & label & "'. It should match the regex: '" & labelRegexStr & "'.")
+      if label.startsWith("__"):
+        raise newException(ValueError, "Invalid label: '" & label & "'. It should not start with '__'.")
+      if label in invalidLabelNames:
+        raise newException(ValueError, "Invalid label: '" & label & "'. It should not be one of: " & $invalidLabelNames & ".")
 
 ######################
 # generic collectors #
@@ -101,13 +106,13 @@ when defined(metrics):
   template getEmptyLabelValues*(collector: Collector): Labels =
     sequtils.repeat("", len(collector.labels))
 
-  proc validateLabelValues*(collector: Collector, labelValues: Labels): Labels =
-    if labelValues == @[]:
+  proc validateLabelValues*(collector: Collector, labelValues: LabelsParam): Labels =
+    if labelValues.len == 0:
       result = collector.getEmptyLabelValues()
-    elif len(labelValues) != len(collector.labels):
+    elif labelValues.len != collector.labels.len:
       raise newException(ValueError, "The number of label values doesn't match the number of labels.")
     else:
-      result = labelValues
+      result = @labelValues
 
     # avoid having to change another thread's heap
     if result notin collector.metrics and collector.creationThreadId != getThreadId():
@@ -131,9 +136,9 @@ when defined(metrics):
       for metric in metrics:
         result.add(metric.toText())
 
-template value*(collector: Collector | type IgnoredCollector, labelValues: Labels = @[]): float64 =
+template value*(collector: Collector | type IgnoredCollector, labelValues: LabelsParam = @[]): float64 =
   when defined(metrics) and collector is not IgnoredCollector:
-    collector.metrics[labelValues][0].value
+    collector.metrics[@labelValues][0].value
   else:
     0.0
 
@@ -189,40 +194,40 @@ proc toText*(registry: Registry): string =
 ###########
 
 when defined(metrics):
-  proc newCounterMetrics(name: string, labels, labelValues: Labels): seq[Metric] =
+  proc newCounterMetrics(name: string, labels, labelValues: LabelsParam): seq[Metric] =
     result = @[
       Metric(name: name,
-            labels: labels,
-            labelValues: labelValues),
+            labels: @labels,
+            labelValues: @labelValues),
       Metric(name: name & "_created",
-            labels: labels,
-            labelValues: labelValues,
+            labels: @labels,
+            labelValues: @labelValues,
             value: getTime().toMilliseconds().float64),
     ]
 
-  proc validateCounterLabelValues(counter: Counter, labelValues: Labels): Labels =
+  proc validateCounterLabelValues(counter: Counter, labelValues: LabelsParam): Labels =
     result = validateLabelValues(counter, labelValues)
     if result notin counter.metrics:
       counter.metrics[result] = newCounterMetrics(counter.name, counter.labels, result)
 
   # don't document this one, even if we're forced to make it public, because it
   # won't work when all (or some) collectors are disabled
-  proc newCounter*(name: string, help: string, labels: Labels = @[], registry = defaultRegistry): Counter =
+  proc newCounter*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry): Counter =
     validateName(name)
     validateLabels(labels)
     result = Counter(name: name,
                     help: help,
                     typ: "counter",
-                    labels: labels,
+                    labels: @labels,
                     metrics: initOrderedTable[Labels, seq[Metric]](),
                     creationThreadId: getThreadId())
     if labels.len == 0:
-      result.metrics[labels] = newCounterMetrics(name, labels, labels)
+      result.metrics[@labels] = newCounterMetrics(name, labels, labels)
     result.register(registry)
 
 template declareCounter*(identifier: untyped,
                         help: static string,
-                        labels: Labels = @[],
+                        labels: LabelsParam = @[],
                         registry = defaultRegistry) {.dirty.} =
   # fine-grained collector disabling will go in here, turning disabled
   # collectors into type aliases for IgnoredCollector
@@ -233,7 +238,7 @@ template declareCounter*(identifier: untyped,
 
 template declarePublicCounter*(identifier: untyped,
                                help: static string,
-                               labels: Labels = @[],
+                               labels: LabelsParam = @[],
                                registry = defaultRegistry) {.dirty.} =
   when defined(metrics):
     var identifier* = newCounter(astToStr(identifier), help, labels, registry)
@@ -254,7 +259,7 @@ else:
   template counter*(name: static string): untyped =
     IgnoredCollector
 
-proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels = @[]) =
+proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
     var timestamp = getTime().toMilliseconds()
 
@@ -266,11 +271,11 @@ proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels
     atomicAdd(counter.metrics[labelValuesCopy][0].value.addr, amount.float64)
     atomicStore(cast[ptr int64](counter.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
 
-template inc*(counter: Counter | type IgnoredCollector, amount: int64|float64 = 1, labelValues: Labels = @[]) =
+template inc*(counter: Counter | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics) and counter is not IgnoredCollector:
     {.gcsafe.}: incCounter(counter, amount, labelValues)
 
-template countExceptions*(counter: Counter | type IgnoredCollector, typ: typedesc, labelValues: Labels, body: untyped) =
+template countExceptions*(counter: Counter | type IgnoredCollector, typ: typedesc, labelValues: LabelsParam, body: untyped) =
   when defined(metrics) and counter is not IgnoredCollector:
     try:
       body
@@ -288,7 +293,7 @@ template countExceptions*(counter: Counter | type IgnoredCollector, typ: typedes
   else:
     body
 
-template countExceptions*(counter: Counter | type IgnoredCollector, labelValues: Labels, body: untyped) =
+template countExceptions*(counter: Counter | type IgnoredCollector, labelValues: LabelsParam, body: untyped) =
   countExceptions(counter, Exception, labelValues, body)
 
 template countExceptions*(counter: Counter | type IgnoredCollector, body: untyped) =
@@ -304,34 +309,34 @@ template countExceptions*(counter: Counter | type IgnoredCollector, body: untype
 #########
 
 when defined(metrics):
-  proc newGaugeMetrics(name: string, labels, labelValues: Labels): seq[Metric] =
+  proc newGaugeMetrics(name: string, labels, labelValues: LabelsParam): seq[Metric] =
     result = @[
       Metric(name: name,
-            labels: labels,
-            labelValues: labelValues),
+            labels: @labels,
+            labelValues: @labelValues),
     ]
 
-  proc validateGaugeLabelValues(gauge: Gauge, labelValues: Labels): Labels =
+  proc validateGaugeLabelValues(gauge: Gauge, labelValues: LabelsParam): Labels =
     result = validateLabelValues(gauge, labelValues)
     if result notin gauge.metrics:
       gauge.metrics[result] = newGaugeMetrics(gauge.name, gauge.labels, result)
 
-  proc newGauge*(name: string, help: string, labels: Labels = @[], registry = defaultRegistry): Gauge =
+  proc newGauge*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry): Gauge =
     validateName(name)
     validateLabels(labels)
     result = Gauge(name: name,
                   help: help,
                   typ: "gauge",
-                  labels: labels,
+                  labels: @labels,
                   metrics: initOrderedTable[Labels, seq[Metric]](),
                   creationThreadId: getThreadId())
     if labels.len == 0:
-      result.metrics[labels] = newGaugeMetrics(name, labels, labels)
+      result.metrics[@labels] = newGaugeMetrics(name, labels, labels)
     result.register(registry)
 
 template declareGauge*(identifier: untyped,
                       help: static string,
-                      labels: Labels = @[],
+                      labels: LabelsParam = @[],
                       registry = defaultRegistry) {.dirty.} =
   when defined(metrics):
     var identifier = newGauge(astToStr(identifier), help, labels, registry)
@@ -349,14 +354,14 @@ else:
 
 template declarePublicGauge*(identifier: untyped,
                             help: static string,
-                            labels: Labels = @[],
+                            labels: LabelsParam = @[],
                             registry = defaultRegistry) {.dirty.} =
   when defined(metrics):
     var identifier* = newGauge(astToStr(identifier), help, labels, registry)
   else:
     type identifier* = IgnoredCollector
 
-proc incGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: Labels = @[]) =
+proc incGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
     var timestamp = getTime().toMilliseconds()
 
@@ -365,11 +370,11 @@ proc incGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: Labels = @[]
     atomicAdd(gauge.metrics[labelValuesCopy][0].value.addr, amount.float64)
     atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
 
-proc decGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: Labels = @[]) =
+proc decGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
     gauge.inc((-amount).float64, labelValues)
 
-proc setGauge(gauge: Gauge, value: int64|float64, labelValues: Labels = @[]) =
+proc setGauge(gauge: Gauge, value: int64|float64, labelValues: LabelsParam = @[]) =
   when defined(metrics):
     var timestamp = getTime().toMilliseconds()
 
@@ -378,24 +383,24 @@ proc setGauge(gauge: Gauge, value: int64|float64, labelValues: Labels = @[]) =
     atomicStoreN(cast[ptr int64](gauge.metrics[labelValuesCopy][0].value.addr), cast[int64](value.float64), ATOMIC_SEQ_CST)
     atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
 
-template inc*(gauge: Gauge, amount: int64|float64 = 1, labelValues: Labels = @[]) =
+template inc*(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
     {.gcsafe.}: incGauge(gauge, amount, labelValues)
 
-template dec*(gauge: Gauge | type IgnoredCollector, amount: int64|float64 = 1, labelValues: Labels = @[]) =
+template dec*(gauge: Gauge | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics) and gauge is not IgnoredCollector:
     {.gcsafe.}: decGauge(gauge, amount, labelValues)
 
-template set*(gauge: Gauge | type IgnoredCollector, value: int64|float64, labelValues: Labels = @[]) =
+template set*(gauge: Gauge | type IgnoredCollector, value: int64|float64, labelValues: LabelsParam = @[]) =
   when defined(metrics) and gauge is not IgnoredCollector:
     {.gcsafe.}: setGauge(gauge, value, labelValues)
 
 # in seconds
-proc setToCurrentTime*(gauge: Gauge | type IgnoredCollector, labelValues: Labels = @[]) =
+proc setToCurrentTime*(gauge: Gauge | type IgnoredCollector, labelValues: LabelsParam = @[]) =
   when defined(metrics) and gauge is not IgnoredCollector:
     gauge.set(getTime().toUnix(), labelValues)
 
-template trackInProgress*(gauge: Gauge | type IgnoredCollector, labelValues: Labels, body: untyped) =
+template trackInProgress*(gauge: Gauge | type IgnoredCollector, labelValues: LabelsParam, body: untyped) =
   when defined(metrics) and gauge is not IgnoredCollector:
     gauge.inc(labelValues = labelValues)
     body
@@ -412,7 +417,7 @@ template trackInProgress*(gauge: Gauge | type IgnoredCollector, body: untyped) =
     body
 
 # in seconds
-template time*(gauge: Gauge | type IgnoredCollector, labelValues: Labels, body: untyped) =
+template time*(gauge: Gauge | type IgnoredCollector, labelValues: LabelsParam, body: untyped) =
   when defined(metrics) and gauge is not IgnoredCollector:
     let start = times.toUnix(getTime())
     body
