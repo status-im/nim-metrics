@@ -449,10 +449,10 @@ template time*(gauge: Gauge | type IgnoredCollector, labelValues: LabelsParam, b
   else:
     body
 
-template time*(gauge: Gauge | type IgnoredCollector, body: untyped) =
-  when defined(metrics) and gauge is not IgnoredCollector:
+template time*(collector: Gauge | Summary | Histogram | type IgnoredCollector, body: untyped) =
+  when defined(metrics) and collector is not IgnoredCollector:
     let labelValues: Labels = @[]
-    gauge.time(labelValues):
+    collector.time(labelValues):
       body
   else:
     body
@@ -537,19 +537,11 @@ template observe*(summary: Summary | type IgnoredCollector, amount: int64|float6
 
 # in seconds
 # the "type IgnoredCollector" case is covered by Gauge.time()
-template time*(summary: Summary, labelValues: LabelsParam, body: untyped) =
+template time*(collector: Summary | Histogram, labelValues: LabelsParam, body: untyped) =
   when defined(metrics):
     let start = times.toUnix(getTime())
     body
-    summary.observe(times.toUnix(getTime()) - start, labelValues = labelValues)
-  else:
-    body
-
-template time*(summary: Summary, body: untyped) =
-  when defined(metrics):
-    let labelValues: Labels = @[]
-    summary.time(labelValues):
-      body
+    collector.observe(times.toUnix(getTime()) - start, labelValues = labelValues)
   else:
     body
 
@@ -663,24 +655,6 @@ proc observeHistogram(histogram: Histogram, amount: int64|float64, labelValues: 
 template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
     {.gcsafe.}: observeHistogram(histogram, amount, labelValues)
-
-# in seconds
-# the "type IgnoredCollector" case is covered by Gauge.time()
-template time*(histogram: Histogram, labelValues: LabelsParam, body: untyped) =
-  when defined(metrics):
-    let start = times.toUnix(getTime())
-    body
-    histogram.observe(times.toUnix(getTime()) - start, labelValues = labelValues)
-  else:
-    body
-
-template time*(histogram: Histogram, body: untyped) =
-  when defined(metrics):
-    let labelValues: Labels = @[]
-    histogram.time(labelValues):
-      body
-  else:
-    body
 
 ###############
 # HTTP server #
