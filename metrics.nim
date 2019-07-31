@@ -4,7 +4,7 @@
 #   * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import hashes, locks, re, sequtils, sets, strutils, tables, times
+import algorithm, hashes, locks, re, sequtils, sets, strutils, tables, times
 
 type
   Labels* = seq[string]
@@ -32,6 +32,8 @@ type
   Counter* = ref object of Collector
   Gauge* = ref object of Collector
   Summary* = ref object of Collector
+  Histogram* = ref object of Collector # a cumulative histogram, not a regular one
+    buckets*: seq[float64]
 
   Registry* = ref object of RootObj
     lock*: Lock
@@ -78,6 +80,9 @@ when defined(metrics):
     result.add(" " & $metric.value)
     if showTimestamp and metric.timestamp > 0:
       result.add(" " & $metric.timestamp)
+
+  proc `$`*(metric: Metric): string =
+    metric.toText()
 
   let
     # these have to be {.global.} for the validation to work with the alternative API
@@ -137,6 +142,11 @@ when defined(metrics):
       for metric in metrics:
         result.add(metric.toText())
 
+  proc `$`*(collector: Collector): string =
+    collector.toTextLines(collector.metrics).join("\n")
+
+proc `$`*(collector: type IgnoredCollector): string = ""
+
 # for testing
 template value*(collector: Collector | type IgnoredCollector, labelValues: LabelsParam = @[]): float64 =
   when defined(metrics) and collector is not IgnoredCollector:
@@ -145,12 +155,16 @@ template value*(collector: Collector | type IgnoredCollector, labelValues: Label
     0.0
 
 # for testing
-proc valueByName*(collector: Collector | type IgnoredCollector, metricName: string, labelValues: LabelsParam = @[]): float64 =
+proc valueByName*(collector: Collector | type IgnoredCollector,
+                  metricName: string,
+                  labelValues: LabelsParam = @[],
+                  extraLabelValues: LabelsParam = @[]): float64 =
   when defined(metrics) and collector is not IgnoredCollector:
+    let allLabelValues = @labelValues & @extraLabelValues
     for metric in collector.metrics[@labelValues]:
-      if metric.name == metricName:
+      if metric.name == metricName and metric.labelValues == allLabelValues:
         return metric.value
-    raise newException(KeyError, "No such metric name for this collector: '" & metricName & "'.")
+    raise newException(KeyError, "No such metric name for this collector: '" & metricName & "' (label values = " & $allLabelValues & ").")
 
 ############
 # registry #
@@ -435,10 +449,10 @@ template time*(gauge: Gauge | type IgnoredCollector, labelValues: LabelsParam, b
   else:
     body
 
-template time*(gauge: Gauge | type IgnoredCollector, body: untyped) =
-  when defined(metrics) and gauge is not IgnoredCollector:
+template time*(collector: Gauge | Summary | Histogram | type IgnoredCollector, body: untyped) =
+  when defined(metrics) and collector is not IgnoredCollector:
     let labelValues: Labels = @[]
-    gauge.time(labelValues):
+    collector.time(labelValues):
       body
   else:
     body
@@ -500,10 +514,7 @@ template declarePublicSummary*(identifier: untyped,
 
 when defined(metrics):
   proc summary*(name: static string): Summary =
-    # This {.global.} var assignment is lifted from the procedure and placed in a
-    # special module init section that's guaranteed to run only once per program.
-    # Calls to this proc will just return the globally initialised variable.
-    var res {.global.} = newSummary(name, "")
+    var res {.global.} = newSummary(name, "") # lifted line
     return res
 else:
   template summary*(name: static string): untyped =
@@ -526,21 +537,124 @@ template observe*(summary: Summary | type IgnoredCollector, amount: int64|float6
 
 # in seconds
 # the "type IgnoredCollector" case is covered by Gauge.time()
-template time*(summary: Summary, labelValues: LabelsParam, body: untyped) =
+template time*(collector: Summary | Histogram, labelValues: LabelsParam, body: untyped) =
   when defined(metrics):
     let start = times.toUnix(getTime())
     body
-    summary.observe(times.toUnix(getTime()) - start, labelValues = labelValues)
+    collector.observe(times.toUnix(getTime()) - start, labelValues = labelValues)
   else:
     body
 
-template time*(summary: Summary, body: untyped) =
+#############
+# histogram #
+#############
+
+let defaultHistogramBuckets* {.global.} = [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, Inf]
+when defined(metrics):
+  proc newHistogramMetrics(name: string, labels, labelValues: LabelsParam, buckets: seq[float64]): seq[Metric] =
+    result = @[
+      Metric(name: name & "_sum",
+            labels: @labels,
+            labelValues: @labelValues),
+      Metric(name: name & "_count",
+            labels: @labels,
+            labelValues: @labelValues),
+      Metric(name: name & "_created",
+            labels: @labels,
+            labelValues: @labelValues,
+            value: getTime().toMilliseconds().float64),
+    ]
+    var bucketLabels = @labels & "le"
+    for bucket in buckets:
+      var bucketStr = $bucket
+      if bucket == Inf:
+        bucketStr = "+Inf"
+      result.add(
+        Metric(name: name & "_bucket",
+              labels: bucketLabels,
+              labelValues: @labelValues & bucketStr)
+      )
+
+  proc validateHistogramLabelValues(histogram: Histogram, labelValues: LabelsParam): Labels =
+    result = validateLabelValues(histogram, labelValues)
+    if result notin histogram.metrics:
+      histogram.metrics[result] = newHistogramMetrics(histogram.name, histogram.labels, result, histogram.buckets)
+
+  proc newHistogram*(name: string,
+                    help: string,
+                    labels: LabelsParam = @[],
+                    registry = defaultRegistry,
+                    buckets: openArray[float64] = defaultHistogramBuckets): Histogram =
+    validateName(name)
+    validateLabels(labels, invalidLabelNames = ["le"])
+    var bucketsSeq = @buckets
+    if bucketsSeq.len > 0 and bucketsSeq[^1] != Inf:
+      bucketsSeq.add(Inf)
+    if bucketsSeq.len < 2:
+      raise newException(ValueError, "Invalid buckets list: '" & $bucketsSeq & "'. At least 2 required.")
+    if not bucketsSeq.isSorted(system.cmp[float64]):
+      raise newException(ValueError, "Invalid buckets list: '" & $bucketsSeq & "'. Must be sorted.")
+    result = Histogram(name: name,
+                    help: help,
+                    typ: "histogram",
+                    labels: @labels,
+                    metrics: initOrderedTable[Labels, seq[Metric]](),
+                    creationThreadId: getThreadId(),
+                    buckets: bucketsSeq)
+    if labels.len == 0:
+      result.metrics[@labels] = newHistogramMetrics(name, labels, labels, bucketsSeq)
+    result.register(registry)
+
+template declareHistogram*(identifier: untyped,
+                        help: static string,
+                        labels: LabelsParam = @[],
+                        registry = defaultRegistry,
+                        buckets: openArray[float64] = defaultHistogramBuckets) {.dirty.} =
   when defined(metrics):
-    let labelValues: Labels = @[]
-    summary.time(labelValues):
-      body
+    var identifier = newHistogram(astToStr(identifier), help, labels, registry, buckets)
   else:
-    body
+    type identifier = IgnoredCollector
+
+template declarePublicHistogram*(identifier: untyped,
+                               help: static string,
+                               labels: LabelsParam = @[],
+                               registry = defaultRegistry,
+                               buckets: openArray[float64] = defaultHistogramBuckets) {.dirty.} =
+  when defined(metrics):
+    var identifier* = newHistogram(astToStr(identifier), help, labels, registry, buckets)
+  else:
+    type identifier* = IgnoredCollector
+
+when defined(metrics):
+  proc histogram*(name: static string): Histogram =
+    var res {.global.} = newHistogram(name, "") # lifted line
+    return res
+else:
+  template histogram*(name: static string): untyped =
+    IgnoredCollector
+
+proc observeHistogram(histogram: Histogram, amount: int64|float64, labelValues: LabelsParam = @[]) =
+  when defined(metrics):
+    var timestamp = getTime().toMilliseconds()
+
+    let labelValuesCopy = validateHistogramLabelValues(histogram, labelValues)
+
+    atomicAdd(histogram.metrics[labelValuesCopy][0].value.addr, amount.float64) # _sum
+    atomicStore(cast[ptr int64](histogram.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+    atomicAdd(histogram.metrics[labelValuesCopy][1].value.addr, 1.float64) # _count
+    atomicStore(cast[ptr int64](histogram.metrics[labelValuesCopy][1].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+    for i, bucket in histogram.buckets:
+      if amount.float64 <= bucket:
+        #- "le" probably stands for "less or equal"
+        #- the same observed value can increase multiple buckets, because this is
+        #  a cumulative histogram
+        atomicAdd(histogram.metrics[labelValuesCopy][i + 3].value.addr, 1.float64) # _bucket{le="<bucket value>"}
+        atomicStore(cast[ptr int64](histogram.metrics[labelValuesCopy][i + 3].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+
+# the "type IgnoredCollector" case is covered by Summary.observe()
+template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
+  when defined(metrics):
+    {.gcsafe.}: observeHistogram(histogram, amount, labelValues)
 
 ###############
 # HTTP server #

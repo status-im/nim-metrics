@@ -21,6 +21,12 @@ suite "logging":
     declareGauge myGauge, "help", registry = registry
     myGauge.set(9.5)
     info "myGauge", myGauge
+    declareSummary mySummary, "help", registry = registry
+    mySummary.observe(10)
+    info "mySummary", mySummary
+    declareHistogram myHistogram, "help", registry = registry
+    myHistogram.observe(10)
+    info "myHistogram", myHistogram
     when defined(metrics):
       for collector, metricsTable in registry.collect():
         for labels, metrics in metricsTable:
