@@ -33,4 +33,5 @@ suite "logging":
           for metric in metrics:
             info "metric", metric
     info "registry", registry
+    info "default registry", defaultRegistry
 

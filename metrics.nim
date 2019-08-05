@@ -4,7 +4,7 @@
 #   * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import algorithm, hashes, locks, re, sequtils, sets, strutils, tables, times
+import algorithm, hashes, locks, os, re, sequtils, sets, strutils, tables, times
 
 type
   Labels* = seq[string]
@@ -180,7 +180,9 @@ proc newRegistry*(): Registry =
 # needs to be {.global.} because of the alternative API's usage of {.global.} collector vars
 var defaultRegistry* {.global.} = newRegistry()
 
-proc register*(collector: Collector, registry = defaultRegistry) =
+# We use a generic type here in order to avoid the hidden type casting of
+# Collector child types to the parent type.
+proc register* [T] (collector: T, registry = defaultRegistry) =
   when defined(metrics):
     withLock registry.lock:
       if collector in registry.collectors:
@@ -188,13 +190,15 @@ proc register*(collector: Collector, registry = defaultRegistry) =
 
       registry.collectors.incl(collector)
 
-proc unregister*(collector: Collector | type IgnoredCollector, registry = defaultRegistry) =
+proc unregister* [T] (collector: T, registry = defaultRegistry) =
   when defined(metrics) and collector is not IgnoredCollector:
     withLock registry.lock:
       if collector notin registry.collectors:
         raise newException(RegistrationError, "Collector not registered.")
 
       registry.collectors.excl(collector)
+
+proc unregister* (collector: type IgnoredCollector, registry = defaultRegistry) = discard
 
 proc collect*(registry: Registry): OrderedTable[Collector, Metrics] =
   when defined(metrics):
@@ -682,4 +686,126 @@ when defined(metrics):
 proc startHttpServer*(address = "127.0.0.1", port = Port(9093)) =
   when defined(metrics):
     httpServerThread.createThread(httpServer, (address, port))
+
+################
+# process info #
+################
+
+when defined(metrics) and defined(linux):
+  import posix
+
+  type ProcessInfo = ref object of Gauge
+
+  proc newProcessInfo*(name: string, help: string, registry = defaultRegistry): ProcessInfo =
+    validateName(name)
+    result = ProcessInfo(name: name,
+                        help: help,
+                        typ: "gauge", # Prometheus won't allow fantasy types in here
+                        creationThreadId: getThreadId())
+    result.register(registry)
+
+  var
+    processInfo* {.global.} = newProcessInfo("process_info", "CPU and memory usage")
+    btime {.global.}: float64 = 0
+    ticks {.global.}: float64 # clock ticks per second
+    pagesize {.global.}: float64 # page size in bytes
+    whitespaceRegex {.global.} = re(r"\s+")
+
+  if btime == 0:
+    try:
+      for line in lines("/proc/stat"):
+        if line.startsWith("btime"):
+          btime = line.split(' ')[1].parseFloat()
+    except IOError:
+      # /proc not mounted?
+      discard
+    ticks = sysconf(SC_CLK_TCK).float64
+    pagesize = sysconf(SC_PAGE_SIZE).float64
+
+  method collect*(collector: ProcessInfo): Metrics =
+    result = initOrderedTable[Labels, seq[Metric]]()
+    result[@[]] = @[]
+    if btime == 0:
+      # we couldn't access /proc
+      return
+
+    var timestamp = getTime().toMilliseconds()
+    let selfStat = readFile("/proc/self/stat").split(' ')[2..^1]
+    result[@[]] = @[
+      Metric(
+        name: "process_virtual_memory_bytes", # Virtual memory size in bytes.
+        value: selfStat[20].parseFloat(),
+        timestamp: timestamp,
+      ),
+      Metric(
+        name: "process_resident_memory_bytes", # Resident memory size in bytes.
+        value: selfStat[21].parseFloat() * pagesize,
+        timestamp: timestamp,
+      ),
+      Metric(
+        name: "process_start_time_seconds", # Start time of the process since unix epoch in seconds.
+        value: selfStat[19].parseFloat() / ticks + btime,
+        timestamp: timestamp,
+      ),
+      Metric(
+        name: "process_cpu_seconds_total", # Total user and system CPU time spent in seconds.
+        value: (selfStat[11].parseFloat() + selfStat[12].parseFloat()) / ticks,
+        timestamp: timestamp,
+      ),
+    ]
+
+    for line in lines("/proc/self/limits"):
+      if line.startsWith("Max open files"):
+        result[@[]].add(
+          Metric(
+            name: "process_max_fds", # Maximum number of open file descriptors.
+            value: line.split(whitespaceRegex)[3].parseFloat(), # a simple `split()` does not combine adjacent whitespace
+            timestamp: timestamp,
+          )
+        )
+        break
+
+    result[@[]].add(
+      Metric(
+        name: "process_open_fds", # Number of open file descriptors.
+        value: toSeq(walkDir("/proc/self/fd")).len.float64,
+        timestamp: timestamp,
+      )
+    )
+
+####################
+# Nim runtime info #
+####################
+
+when defined(metrics):
+  type RuntimeInfo = ref object of Gauge
+
+  proc newRuntimeInfo*(name: string, help: string, registry = defaultRegistry): RuntimeInfo =
+    validateName(name)
+    result = RuntimeInfo(name: name,
+                        help: help,
+                        typ: "gauge",
+                        creationThreadId: getThreadId())
+    result.register(registry)
+
+  var
+    runtimeInfo* {.global.} = newRuntimeInfo("nim_runtime_info", "Nim runtime info")
+
+  method collect*(collector: RuntimeInfo): Metrics =
+    result = initOrderedTable[Labels, seq[Metric]]()
+    var timestamp = getTime().toMilliseconds()
+
+    result[@[]] = @[
+      Metric(
+        name: "nim_gc_total_mem_bytes", # the number of bytes that are owned by the process
+        value: getTotalMem().float64,
+        timestamp: timestamp,
+      ),
+      Metric(
+        name: "nim_gc_occupied_mem_bytes", # the number of bytes that are owned by the process and hold data
+        value: getOccupiedMem().float64,
+        timestamp: timestamp,
+      ),
+    ]
+    # TODO: parse the output of `GC_getStatistics()` for more stats
 
