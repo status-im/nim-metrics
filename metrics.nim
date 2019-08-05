@@ -662,21 +662,22 @@ template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: 
 
 import asynchttpserver, asyncdispatch
 
-type HttpServerArgs = tuple[address: string, port: Port]
-var httpServerThread: Thread[HttpServerArgs]
+when defined(metrics):
+  type HttpServerArgs = tuple[address: string, port: Port]
+  var httpServerThread: Thread[HttpServerArgs]
 
-proc httpServer(args: HttpServerArgs) {.thread.} =
-  let (address, port) = args
-  var server = newAsyncHttpServer()
+  proc httpServer(args: HttpServerArgs) {.thread.} =
+    let (address, port) = args
+    var server = newAsyncHttpServer()
 
-  proc cb(req: Request) {.async.} =
-    if req.url.path == "/metrics":
-      {.gcsafe.}:
-        await req.respond(Http200, defaultRegistry.toText(), newHttpHeaders([("Content-Type", CONTENT_TYPE)]))
-    else:
-      await req.respond(Http404, "Try /metrics")
+    proc cb(req: Request) {.async.} =
+      if req.url.path == "/metrics":
+        {.gcsafe.}:
+          await req.respond(Http200, defaultRegistry.toText(), newHttpHeaders([("Content-Type", CONTENT_TYPE)]))
+      else:
+        await req.respond(Http404, "Try /metrics")
 
-  waitFor server.serve(port, cb, address)
+    waitFor server.serve(port, cb, address)
 
 proc startHttpServer*(address = "127.0.0.1", port = Port(9093)) =
   when defined(metrics):
