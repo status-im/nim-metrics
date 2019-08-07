@@ -19,7 +19,7 @@ nimble install https://github.com/status-im/nim-metrics@#master
 
 ## Usage
 
-To enable metrics, compile your code with `-d:metrics`. You also need `--threads:on` for some atomic operations to work.
+To enable metrics, compile your code with `-d:metrics`. You also need `--threads:on` for atomic operations to work.
 
 ## Contributing
 
