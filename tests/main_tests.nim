@@ -5,8 +5,21 @@
 #   * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import os, strutils, unittest,
+import net, os, strutils, unittest,
       ../metrics
+
+metricExports.add(MetricExportType(
+  metricProtocol: STATSD,
+  netProtocol: UDP,
+  address: "127.0.0.1",
+  port: Port(8125)
+))
+metricExports.add(MetricExportType(
+  metricProtocol: CARBON,
+  netProtocol: TCP,
+  address: "127.0.0.1",
+  port: Port(2003)
+))
 
 declareCounter globalCounter, "help"
 declarePublicCounter globalPublicCounter, "help"

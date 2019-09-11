@@ -4,7 +4,7 @@
 #   * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import algorithm, hashes, locks, os, re, sequtils, sets, strutils, tables, times
+import algorithm, hashes, locks, net, os, re, sequtils, sets, strutils, tables, times
 
 type
   Labels* = seq[string]
@@ -40,6 +40,21 @@ type
     collectors*: OrderedSet[Collector]
 
   RegistrationError* = object of Exception
+
+  MetricProtocol* = enum
+    STATSD
+    CARBON
+  NetProtocol* = enum
+    TCP
+    UDP
+  MetricExportType* = object
+    metricProtocol*: MetricProtocol
+    netProtocol*: NetProtocol
+    address*: string
+    port*: Port
+
+# TODO: an API to add/remove backends
+var metricExports*: seq[MetricExportType] = @[]
 
 const CONTENT_TYPE* = "text/plain; version=0.0.4; charset=utf-8"
 
@@ -103,6 +118,37 @@ when defined(metrics):
         raise newException(ValueError, "Invalid label: '" & label & "'. It should not start with '__'.")
       if label in invalidLabelNames:
         raise newException(ValueError, "Invalid label: '" & label & "'. It should not be one of: " & $invalidLabelNames & ".")
+
+  proc pushMetrics*(name: string, value: float64, increment = 0.float64, metricType: string, timestamp: int64, rate = 1.float) =
+    # TODO: add a rate API to collectors calling this proc
+    for exportType in metricExports:
+      var payload: string
+      case exportType.metricProtocol:
+        of STATSD:
+          var finalValue = value
+          if metricType == "c":
+            # StatsD wants only the counter's increment, while Carbon wants the cummulated value
+            finalValue = increment
+          payload = "$#:$#|$#" % [name, $finalValue, metricType]
+          if rate != 1:
+            payload &= "|@" & $rate
+        of CARBON:
+          payload = "$# $# $#" % [name, $value, $timestamp]
+      # TODO: reuse sockets, use a connection pool for TCP, retry sending and
+      # reconnect after a certain interval, ofload all this to a separate thread
+      case exportType.netProtocol:
+        of UDP:
+          var socket = newSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+          socket.sendTo(exportType.address, exportType.port, payload)
+          socket.close()
+        of TCP:
+          var socket = newSocket()
+          try:
+            socket.connect(exportType.address, exportType.port, timeout = 100)
+            discard socket.trySend(payload)
+          except:
+            discard
+          socket.close()
 
 ######################
 # generic collectors #
@@ -299,6 +345,12 @@ proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels
     atomicAdd(counter.metrics[labelValuesCopy][0].value.addr, amount.float64)
     atomicStore(cast[ptr int64](counter.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
 
+    pushMetrics(name = counter.name,
+                value = counter.metrics[labelValuesCopy][0].value,
+                increment = amount.float64,
+                metricType = "c",
+                timestamp = timestamp)
+
 template inc*(counter: Counter | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics) and counter is not IgnoredCollector:
     {.gcsafe.}: incCounter(counter, amount, labelValues)
@@ -398,6 +450,11 @@ proc incGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam 
     atomicAdd(gauge.metrics[labelValuesCopy][0].value.addr, amount.float64)
     atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
 
+    pushMetrics(name = gauge.name,
+                value = gauge.metrics[labelValuesCopy][0].value,
+                metricType = "g",
+                timestamp = timestamp)
+
 proc decGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
     gauge.inc((-amount).float64, labelValues)
@@ -410,6 +467,11 @@ proc setGauge(gauge: Gauge, value: int64|float64, labelValues: LabelsParam = @[]
 
     atomicStoreN(cast[ptr int64](gauge.metrics[labelValuesCopy][0].value.addr), cast[int64](value.float64), ATOMIC_SEQ_CST)
     atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+
+    pushMetrics(name = gauge.name,
+                value = value.float64,
+                metricType = "g",
+                timestamp = timestamp)
 
 template inc*(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
