@@ -4,7 +4,7 @@
 #   * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import algorithm, hashes, locks, net, os, re, sequtils, sets, strutils, tables, times
+import algorithm, hashes, locks, net, os, random, re, sequtils, sets, strutils, tables, times
 
 type
   Labels* = seq[string]
@@ -26,6 +26,7 @@ type
     labels*: Labels
     metrics*: Metrics
     creationThreadId*: int
+    sampleRate*: float # only used by StatsD counters
 
   IgnoredCollector* = object
 
@@ -40,21 +41,6 @@ type
     collectors*: OrderedSet[Collector]
 
   RegistrationError* = object of Exception
-
-  MetricProtocol* = enum
-    STATSD
-    CARBON
-  NetProtocol* = enum
-    TCP
-    UDP
-  MetricExportType* = object
-    metricProtocol*: MetricProtocol
-    netProtocol*: NetProtocol
-    address*: string
-    port*: Port
-
-# TODO: an API to add/remove backends
-var metricExports*: seq[MetricExportType] = @[]
 
 const CONTENT_TYPE* = "text/plain; version=0.0.4; charset=utf-8"
 
@@ -118,37 +104,6 @@ when defined(metrics):
         raise newException(ValueError, "Invalid label: '" & label & "'. It should not start with '__'.")
       if label in invalidLabelNames:
         raise newException(ValueError, "Invalid label: '" & label & "'. It should not be one of: " & $invalidLabelNames & ".")
-
-  proc pushMetrics*(name: string, value: float64, increment = 0.float64, metricType: string, timestamp: int64, rate = 1.float) =
-    # TODO: add a rate API to collectors calling this proc
-    for exportType in metricExports:
-      var payload: string
-      case exportType.metricProtocol:
-        of STATSD:
-          var finalValue = value
-          if metricType == "c":
-            # StatsD wants only the counter's increment, while Carbon wants the cummulated value
-            finalValue = increment
-          payload = "$#:$#|$#" % [name, $finalValue, metricType]
-          if rate != 1:
-            payload &= "|@" & $rate
-        of CARBON:
-          payload = "$# $# $#" % [name, $value, $timestamp]
-      # TODO: reuse sockets, use a connection pool for TCP, retry sending and
-      # reconnect after a certain interval, ofload all this to a separate thread
-      case exportType.netProtocol:
-        of UDP:
-          var socket = newSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
-          socket.sendTo(exportType.address, exportType.port, payload)
-          socket.close()
-        of TCP:
-          var socket = newSocket()
-          try:
-            socket.connect(exportType.address, exportType.port, timeout = 100)
-            discard socket.trySend(payload)
-          except:
-            discard
-          socket.close()
 
 ######################
 # generic collectors #
@@ -286,7 +241,7 @@ when defined(metrics):
 
   # don't document this one, even if we're forced to make it public, because it
   # won't work when all (or some) collectors are disabled
-  proc newCounter*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry): Counter =
+  proc newCounter*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry, sampleRate = 1.float): Counter =
     validateName(name)
     validateLabels(labels)
     result = Counter(name: name,
@@ -294,7 +249,8 @@ when defined(metrics):
                     typ: "counter",
                     labels: @labels,
                     metrics: initOrderedTable[Labels, seq[Metric]](),
-                    creationThreadId: getThreadId())
+                    creationThreadId: getThreadId(),
+                    sampleRate: sampleRate)
     if labels.len == 0:
       result.metrics[@labels] = newCounterMetrics(name, labels, labels)
     result.register(registry)
@@ -302,20 +258,22 @@ when defined(metrics):
 template declareCounter*(identifier: untyped,
                         help: static string,
                         labels: LabelsParam = @[],
-                        registry = defaultRegistry) {.dirty.} =
+                        registry = defaultRegistry,
+                        sampleRate = 1.float) {.dirty.} =
   # fine-grained collector disabling will go in here, turning disabled
   # collectors into type aliases for IgnoredCollector
   when defined(metrics):
-    var identifier = newCounter(astToStr(identifier), help, labels, registry)
+    var identifier = newCounter(astToStr(identifier), help, labels, registry, sampleRate)
   else:
     type identifier = IgnoredCollector
 
 template declarePublicCounter*(identifier: untyped,
                                help: static string,
                                labels: LabelsParam = @[],
-                               registry = defaultRegistry) {.dirty.} =
+                               registry = defaultRegistry,
+                               sampleRate = 1.float) {.dirty.} =
   when defined(metrics):
-    var identifier* = newCounter(astToStr(identifier), help, labels, registry)
+    var identifier* = newCounter(astToStr(identifier), help, labels, registry, sampleRate)
   else:
     type identifier* = IgnoredCollector
 
@@ -349,7 +307,8 @@ proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels
                 value = counter.metrics[labelValuesCopy][0].value,
                 increment = amount.float64,
                 metricType = "c",
-                timestamp = timestamp)
+                timestamp = timestamp,
+                sampleRate = counter.sampleRate)
 
 template inc*(counter: Counter | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics) and counter is not IgnoredCollector:
@@ -870,4 +829,161 @@ when defined(metrics):
       ),
     ]
     # TODO: parse the output of `GC_getStatistics()` for more stats
+
+#######################################
+# export metrics to StatsD and Carbon #
+#######################################
+
+when defined(metrics):
+  type
+    MetricProtocol* = enum
+      STATSD
+      CARBON
+
+    NetProtocol* = enum
+      TCP
+      UDP
+
+    ExportBackend* = object
+      metricProtocol*: MetricProtocol
+      netProtocol*: NetProtocol
+      address*: string
+      port*: Port
+
+    ExportedMetric = object
+      name: string
+      value: float64
+      increment: float64
+      metricType: string
+      timestamp: int64
+      sampleRate: float # only used by StatsD
+
+  var
+    exportBackends*: seq[ExportBackend] = @[]
+    exportBackendsLock*: Lock
+    exportChan: Channel[ExportedMetric]
+    exportThread: Thread[void]
+
+  initLock(exportBackendsLock)
+  exportChan.open() # we want the default unlimited queue, so send() is non-blocking
+
+  proc addExportBackend*(metricProtocol: MetricProtocol, netProtocol: NetProtocol, address: string, port: Port) =
+    withLock(exportBackendsLock):
+      exportBackends.add(ExportBackend(
+                          metricProtocol: metricProtocol,
+                          netProtocol: netProtocol,
+                          address: address,
+                          port: port
+                        ))
+
+  proc pushMetrics*(name: string, value: float64, increment = 0.float64, metricType: string, timestamp: int64, sampleRate = 1.float) =
+    # this may run from different threads
+
+    if len(exportBackends) == 0:
+      # no backends configured
+      return
+
+    # Send a new metric to the thread handling the networking. It's
+    # non-blocking because channels have an unlimited queue by default.
+    exportChan.send(ExportedMetric(
+                      name: name,
+                      value: value,
+                      increment: increment,
+                      metricType: metricType,
+                      timestamp: timestamp,
+                      sampleRate: sampleRate
+                    ))
+
+  proc pushMetricsWorker() {.thread.} =
+    const
+      CONNECT_TIMEOUT_MS = 100 # in milliseconds
+      RECONNECT_INTERVAL = initDuration(seconds = 60)
+
+    var
+      data: ExportedMetric # received from the channel
+      sockets: seq[Socket] = @[] # we maintain one socket per backend
+      lastConnectionTime: seq[times.Time] = @[] # last time we successfully connected to the corresponding socket
+
+    # connect or reconnect the socket at position i in `sockets`
+    proc reconnectSocket(i: int, backend: ExportBackend) =
+      # Throttle it.
+      # We don't expect enough backends to worry about the thundering herd problem.
+      if getTime() - lastConnectionTime[i] < RECONNECT_INTERVAL:
+        return
+
+      # try to close any existing socket, first
+      if sockets[i] != nil:
+        try:
+          sockets[i].close()
+        except:
+          discard
+
+      # create a new socket
+      case backend.netProtocol:
+        of UDP:
+          sockets[i] = newSocket(Domain.AF_INET, SockType.SOCK_DGRAM, Protocol.IPPROTO_UDP)
+        of TCP:
+          sockets[i] = newSocket()
+
+      # try to connect
+      try:
+        sockets[i].connect(backend.address, backend.port, timeout = CONNECT_TIMEOUT_MS)
+        lastConnectionTime[i] = getTime()
+      except:
+        discard
+
+    # seed the simple PRNG we're using for sample rates
+    randomize()
+
+    var
+      payload: string
+      i: int
+      backend: ExportBackend
+      finalValue: float64
+      sampleString: string
+
+    # No custom cleanup needed here, so let this thread be killed, the sockets
+    # closed, etc., by the OS.
+    while true:
+      data = exportChan.recv() # blocking read
+      withLock(exportBackendsLock):
+        {.gcsafe.}:
+          # Account for backends added after this thread is launched. We don't
+          # support backend deletion.
+          sockets.setLen(len(exportBackends))
+          lastConnectionTime.setLen(len(exportBackends))
+
+          # send the metrics
+          for i, backend in exportBackends:
+            case backend.metricProtocol:
+              of STATSD:
+                finalValue = data.value
+                sampleString = ""
+
+                if data.metricType == "c":
+                  # StatsD wants only the counter's increment, while Carbon wants the cumulated value
+                  finalValue = data.increment
+
+                  # If the sample rate was set, throw the dice here.
+                  if data.sampleRate > 0 and data.sampleRate < 1.float:
+                    if rand(max = 1.float) > data.sampleRate:
+                      # skip it
+                      continue
+                    sampleString = "|@" & $data.sampleRate
+                payload = "$#:$#|$#$#\n" % [data.name, $finalValue, data.metricType, sampleString]
+              of CARBON:
+                # Carbon wants a 32-bit timestamp in seconds.
+                payload = "$# $# $#\n" % [data.name, $data.value, $(data.timestamp div 1000).int32]
+
+            # initial socket setup
+            if sockets[i] == nil:
+              reconnectSocket(i, backend)
+
+            try:
+              sockets[i].send(payload)
+            except:
+              reconnectSocket(i, backend)
+              # No need to try and resend the data. We can afford to lose it.
+
+  exportThread.createThread(pushMetricsWorker)
 
