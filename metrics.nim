@@ -141,7 +141,7 @@ when defined(metrics):
     ]
     for labelValues, metrics in metricsTable:
       for metric in metrics:
-        result.add(metric.toText())
+        result.add($metric)
 
   proc `$`*(collector: Collector): string =
     collector.toTextLines(collector.metrics).join("\n")
@@ -210,7 +210,7 @@ proc collect*(registry: Registry): OrderedTable[Collector, Metrics] =
         deepCopy(collectorCopy, collector)
         result[collectorCopy] = collectorCopy.collect()
 
-proc toText*(registry: Registry): string =
+proc `$`*(registry: Registry): string =
   when defined(metrics):
     var res: seq[string] = @[]
     for collector, metricsTable in registry.collect():
@@ -259,11 +259,12 @@ template declareCounter*(identifier: untyped,
                         help: static string,
                         labels: LabelsParam = @[],
                         registry = defaultRegistry,
-                        sampleRate = 1.float) {.dirty.} =
+                        sampleRate = 1.float,
+                        name = "") {.dirty.} =
   # fine-grained collector disabling will go in here, turning disabled
   # collectors into type aliases for IgnoredCollector
   when defined(metrics):
-    var identifier = newCounter(astToStr(identifier), help, labels, registry, sampleRate)
+    var identifier = newCounter(if name != "": name else: astToStr(identifier), help, labels, registry, sampleRate)
   else:
     type identifier = IgnoredCollector
 
@@ -271,9 +272,10 @@ template declarePublicCounter*(identifier: untyped,
                                help: static string,
                                labels: LabelsParam = @[],
                                registry = defaultRegistry,
-                               sampleRate = 1.float) {.dirty.} =
+                               sampleRate = 1.float,
+                               name = "") {.dirty.} =
   when defined(metrics):
-    var identifier* = newCounter(astToStr(identifier), help, labels, registry, sampleRate)
+    var identifier* = newCounter(if name != "": name else: astToStr(identifier), help, labels, registry, sampleRate)
   else:
     type identifier* = IgnoredCollector
 
@@ -376,9 +378,10 @@ when defined(metrics):
 template declareGauge*(identifier: untyped,
                       help: static string,
                       labels: LabelsParam = @[],
-                      registry = defaultRegistry) {.dirty.} =
+                      registry = defaultRegistry,
+                      name = "") {.dirty.} =
   when defined(metrics):
-    var identifier = newGauge(astToStr(identifier), help, labels, registry)
+    var identifier = newGauge(if name != "": name else: astToStr(identifier), help, labels, registry)
   else:
     type identifier = IgnoredCollector
 
@@ -394,9 +397,10 @@ else:
 template declarePublicGauge*(identifier: untyped,
                             help: static string,
                             labels: LabelsParam = @[],
-                            registry = defaultRegistry) {.dirty.} =
+                            registry = defaultRegistry,
+                            name = "") {.dirty.} =
   when defined(metrics):
-    var identifier* = newGauge(astToStr(identifier), help, labels, registry)
+    var identifier* = newGauge(if name != "": name else: astToStr(identifier), help, labels, registry)
   else:
     type identifier* = IgnoredCollector
 
@@ -432,6 +436,7 @@ proc setGauge(gauge: Gauge, value: int64|float64, labelValues: LabelsParam = @[]
                 metricType = "g",
                 timestamp = timestamp)
 
+# the "type IgnoredCollector" case is covered by Counter.inc()
 template inc*(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
     {.gcsafe.}: incGauge(gauge, amount, labelValues)
@@ -522,18 +527,20 @@ when defined(metrics):
 template declareSummary*(identifier: untyped,
                         help: static string,
                         labels: LabelsParam = @[],
-                        registry = defaultRegistry) {.dirty.} =
+                        registry = defaultRegistry,
+                        name = "") {.dirty.} =
   when defined(metrics):
-    var identifier = newSummary(astToStr(identifier), help, labels, registry)
+    var identifier = newSummary(if name != "": name else: astToStr(identifier), help, labels, registry)
   else:
     type identifier = IgnoredCollector
 
 template declarePublicSummary*(identifier: untyped,
                                help: static string,
                                labels: LabelsParam = @[],
-                               registry = defaultRegistry) {.dirty.} =
+                               registry = defaultRegistry,
+                               name = "") {.dirty.} =
   when defined(metrics):
-    var identifier* = newSummary(astToStr(identifier), help, labels, registry)
+    var identifier* = newSummary(if name != "": name else: astToStr(identifier), help, labels, registry)
   else:
     type identifier* = IgnoredCollector
 
@@ -561,7 +568,7 @@ template observe*(summary: Summary | type IgnoredCollector, amount: int64|float6
     {.gcsafe.}: observeSummary(summary, amount, labelValues)
 
 # in seconds
-# the "type IgnoredCollector" case is covered by Gauge.time()
+# the "type IgnoredCollector" case and the version without labels are covered by Gauge.time()
 template time*(collector: Summary | Histogram, labelValues: LabelsParam, body: untyped) =
   when defined(metrics):
     let start = times.toUnix(getTime())
@@ -634,9 +641,10 @@ template declareHistogram*(identifier: untyped,
                         help: static string,
                         labels: LabelsParam = @[],
                         registry = defaultRegistry,
-                        buckets: openArray[float64] = defaultHistogramBuckets) {.dirty.} =
+                        buckets: openArray[float64] = defaultHistogramBuckets,
+                        name = "") {.dirty.} =
   when defined(metrics):
-    var identifier = newHistogram(astToStr(identifier), help, labels, registry, buckets)
+    var identifier = newHistogram(if name != "": name else: astToStr(identifier), help, labels, registry, buckets)
   else:
     type identifier = IgnoredCollector
 
@@ -644,9 +652,10 @@ template declarePublicHistogram*(identifier: untyped,
                                help: static string,
                                labels: LabelsParam = @[],
                                registry = defaultRegistry,
-                               buckets: openArray[float64] = defaultHistogramBuckets) {.dirty.} =
+                               buckets: openArray[float64] = defaultHistogramBuckets,
+                               name = "") {.dirty.} =
   when defined(metrics):
-    var identifier* = newHistogram(astToStr(identifier), help, labels, registry, buckets)
+    var identifier* = newHistogram(if name != "": name else: astToStr(identifier), help, labels, registry, buckets)
   else:
     type identifier* = IgnoredCollector
 
@@ -698,7 +707,7 @@ when defined(metrics):
     proc cb(req: Request) {.async.} =
       if req.url.path == "/metrics":
         {.gcsafe.}:
-          await req.respond(Http200, defaultRegistry.toText(), newHttpHeaders([("Content-Type", CONTENT_TYPE)]))
+          await req.respond(Http200, $defaultRegistry, newHttpHeaders([("Content-Type", CONTENT_TYPE)]))
       else:
         await req.respond(Http404, "Try /metrics")
 

@@ -60,8 +60,13 @@ suite "counter":
     check counter("one_off_counter").value == 1
     counter("one_off_counter").inc(0.5)
     check counter("one_off_counter").value == 1.5
+
     # confusing, but allowed
     check gauge("one_off_counter").value == 0
+
+    # colons in name
+    counter("one:off:counter:colons").inc()
+    check counter("one:off:counter:colons").value == 1
 
   test "exceptions":
     proc f(switch: bool) =
@@ -88,7 +93,6 @@ suite "counter":
     myCounter.countExceptions:
       discard
     check myCounter.value == 2
-    # echo myCounter.toTextLines().join("\n")
 
   test "labels":
     declareCounter lCounter, "l help", @["foo", "bar"], registry
@@ -102,7 +106,7 @@ suite "counter":
     let labelValues = @["a", "x \"y\" \n\\z"]
     lCounter.inc(labelValues = labelValues)
     check lCounter.value(labelValues) == 1
-    # echo registry.toText()
+    # echo registry
 
     # label validation
     expect ValueError:
@@ -123,6 +127,20 @@ suite "counter":
     sCounter.inc()
     # No sampling done on our side, just in sending the increments to a StatsD server
     check sCounter.value == 1
+
+  test "names with colons":
+    declareCounter cCounter, "counter with colons in name", registry = registry, name = "foo:bar:baz"
+    cCounter.inc()
+    check cCounter.value == 1
+    check cCounter.valueByName("foo:bar:baz") == 1
+    # echo cCounter
+
+    var myName = "bla:bla"
+    declareCounter cCounter2, "another counter with colon in name", registry = registry, name = myName
+    cCounter2.inc()
+    check cCounter2.value == 1
+    check cCounter2.valueByName("bla:bla") == 1
+    # echo cCounter2
 
 suite "gauge":
   setup:
@@ -158,14 +176,14 @@ suite "gauge":
     lgauge.trackInProgress(labelValues):
       check lgauge.value(labelValues) == 1
     check lgauge.value(labelValues) == 0
-    # echo registry.toText()
+    # echo registry
 
   test "timing":
     myGauge.time:
       sleep(1000)
       check myGauge.value == 0
     check myGauge.value >= 1 # may be 2 inside a macOS Travis job
-    # echo registry.toText()
+    # echo registry
 
   test "timing with labels":
     declareGauge lgauge, "help", @["foobar"], registry = registry
@@ -173,6 +191,13 @@ suite "gauge":
     lgauge.time(labelValues):
       sleep(1000)
     check lgauge.value(labelValues) >= 1
+
+  test "names with colons":
+    declareGauge cGauge, "gauge with colons in name", registry = registry, name = "foo:bar:baz"
+    cGauge.inc()
+    check cGauge.value == 1
+    check cGauge.valueByName("foo:bar:baz") == 1
+    # echo cGauge
 
 suite "summary":
   setup:
@@ -206,6 +231,13 @@ suite "summary":
     lsummary.time(labelValues):
       sleep(1000)
     check lsummary.valueByName("lsummary_sum", labelValues) >= 1
+
+  test "names with colons":
+    declareSummary cSummary, "summary with colons in name", registry = registry, name = "foo:bar:baz"
+    cSummary.observe(10)
+    check cSummary.valueByName("foo:bar:baz_count") == 1
+    check cSummary.valueByName("foo:bar:baz_sum") == 10
+    # echo cSummary
 
 suite "histogram":
   setup:
@@ -288,4 +320,11 @@ suite "histogram":
     check lhistogram.valueByName("lhistogram_sum", labelValues) >= 1
     check lhistogram.valueByName("lhistogram_count", labelValues) == 1
     check lhistogram.valueByName("lhistogram_bucket", labelValues, ["+Inf"]) == 1
+
+  test "names with colons":
+    declareHistogram cHistogram, "histogram with colons in name", registry = registry, name = "foo:bar:baz"
+    cHistogram.observe(10)
+    check cHistogram.valueByName("foo:bar:baz_count") == 1
+    check cHistogram.valueByName("foo:bar:baz_sum") == 10
+    # echo cHistogram
 
