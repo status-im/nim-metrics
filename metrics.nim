@@ -858,14 +858,22 @@ when defined(metrics):
       timestamp: int64
       sampleRate: float # only used by StatsD
 
+  const
+    METRIC_EXPORT_BUFER_SIZE = 1024 # used by exportChan
+    CONNECT_TIMEOUT_MS = 100 # in milliseconds
+    RECONNECT_INTERVAL = initDuration(seconds = 10)
+
   var
     exportBackends*: seq[ExportBackend] = @[]
     exportBackendsLock*: Lock
     exportChan: Channel[ExportedMetric]
     exportThread: Thread[void]
+    sockets: seq[Socket] = @[] # we maintain one socket per backend
+    lastConnectionTime: seq[times.Time] = @[] # last time we tried to connect the corresponding socket
+    epochStart = initTime(0, 0)
 
   initLock(exportBackendsLock)
-  exportChan.open() # we want the default unlimited queue, so send() is non-blocking
+  exportChan.open(maxItems = METRIC_EXPORT_BUFER_SIZE)
 
   proc addExportBackend*(metricProtocol: MetricProtocol, netProtocol: NetProtocol, address: string, port: Port) =
     withLock(exportBackendsLock):
@@ -883,64 +891,63 @@ when defined(metrics):
       # no backends configured
       return
 
-    # Send a new metric to the thread handling the networking. It's
-    # non-blocking because channels have an unlimited queue by default.
-    exportChan.send(ExportedMetric(
-                      name: name,
-                      value: value,
-                      increment: increment,
-                      metricType: metricType,
-                      timestamp: timestamp,
-                      sampleRate: sampleRate
-                    ))
+    # Send a new metric to the thread handling the networking.
+    # Silently drop it if the channel's buffer is full.
+    discard exportChan.trySend(ExportedMetric(
+                                name: name,
+                                value: value,
+                                increment: increment,
+                                metricType: metricType,
+                                timestamp: timestamp,
+                                sampleRate: sampleRate
+                              ))
 
-  proc pushMetricsWorker() {.thread.} =
-    const
-      CONNECT_TIMEOUT_MS = 100 # in milliseconds
-      RECONNECT_INTERVAL = initDuration(seconds = 60)
+  # connect or reconnect the socket at position i in `sockets`
+  proc reconnectSocket(i: int, backend: ExportBackend) =
+    # Throttle it.
+    # We don't expect enough backends to worry about the thundering herd problem.
+    if getTime() - lastConnectionTime[i] < RECONNECT_INTERVAL:
+      sleep(100) # silly optimisation for an artificial benchmark where we try to
+                 # export as many metric updates as possible with a missing backend
+      return
 
-    var
-      data: ExportedMetric # received from the channel
-      sockets: seq[Socket] = @[] # we maintain one socket per backend
-      lastConnectionTime: seq[times.Time] = @[] # last time we successfully connected to the corresponding socket
-
-    # connect or reconnect the socket at position i in `sockets`
-    proc reconnectSocket(i: int, backend: ExportBackend) =
-      # Throttle it.
-      # We don't expect enough backends to worry about the thundering herd problem.
-      if getTime() - lastConnectionTime[i] < RECONNECT_INTERVAL:
-        return
-
-      # try to close any existing socket, first
-      if sockets[i] != nil:
-        try:
-          sockets[i].close()
-        except:
-          discard
-
-      # create a new socket
-      case backend.netProtocol:
-        of UDP:
-          sockets[i] = newSocket(Domain.AF_INET, SockType.SOCK_DGRAM, Protocol.IPPROTO_UDP)
-        of TCP:
-          sockets[i] = newSocket()
-
-      # try to connect
+    # try to close any existing socket, first
+    if sockets[i] != nil:
       try:
-        sockets[i].connect(backend.address, backend.port, timeout = CONNECT_TIMEOUT_MS)
-        lastConnectionTime[i] = getTime()
+        sockets[i].close()
       except:
         discard
+      sockets[i] = nil # we use this as a flag to avoid sends without a connection
 
-    # seed the simple PRNG we're using for sample rates
-    randomize()
+    # create a new socket
+    case backend.netProtocol:
+      of UDP:
+        sockets[i] = newSocket(Domain.AF_INET, SockType.SOCK_DGRAM, Protocol.IPPROTO_UDP)
+      of TCP:
+        sockets[i] = newSocket()
 
+    # try to connect
+    lastConnectionTime[i] = getTime()
+    try:
+      sockets[i].connect(backend.address, backend.port, timeout = CONNECT_TIMEOUT_MS)
+    except:
+      try:
+        sockets[i].close()
+      except:
+        discard
+      sockets[i] = nil
+
+  proc pushMetricsWorker() {.thread.} =
     var
+      data: ExportedMetric # received from the channel
       payload: string
       i: int
       backend: ExportBackend
       finalValue: float64
       sampleString: string
+
+    # seed the simple PRNG we're using for sample rates
+    randomize()
 
     # No custom cleanup needed here, so let this thread be killed, the sockets
     # closed, etc., by the OS.
@@ -950,8 +957,10 @@ when defined(metrics):
         {.gcsafe.}:
           # Account for backends added after this thread is launched. We don't
           # support backend deletion.
-          sockets.setLen(len(exportBackends))
-          lastConnectionTime.setLen(len(exportBackends))
+          if len(sockets) < len(exportBackends):
+            sockets.setLen(len(exportBackends))
+          if len(lastConnectionTime) < len(exportBackends):
+            lastConnectionTime.setLen(len(exportBackends))
 
           # send the metrics
           for i, backend in exportBackends:
@@ -975,12 +984,14 @@ when defined(metrics):
                 # Carbon wants a 32-bit timestamp in seconds.
                 payload = "$# $# $#\n" % [data.name, $data.value, $(data.timestamp div 1000).int32]
 
-            # initial socket setup
             if sockets[i] == nil:
               reconnectSocket(i, backend)
+              if sockets[i] == nil:
+                # we're in the waiting period
+                continue
 
             try:
-              sockets[i].send(payload)
+              sockets[i].send(payload, flags = {}) # the default flags would not raise an exception on a broken connection
             except:
               reconnectSocket(i, backend)
               # No need to try and resend the data. We can afford to lose it.
