@@ -5,8 +5,22 @@
 #   * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import os, strutils, unittest,
+import net, os, strutils, unittest,
       ../metrics
+
+when defined(metrics):
+  addExportBackend(
+    metricProtocol = STATSD,
+    netProtocol = UDP,
+    address = "127.0.0.1",
+    port = Port(8125)
+  )
+  addExportBackend(
+    metricProtocol = CARBON,
+    netProtocol = TCP,
+    address = "127.0.0.1",
+    port = Port(2003)
+  )
 
 declareCounter globalCounter, "help"
 declarePublicCounter globalPublicCounter, "help"
@@ -103,6 +117,12 @@ suite "counter":
     let labelValues2 = ["a", "x \"y\" \n\\z"]
     lCounter2.inc(labelValues = labelValues2)
     check lCounter2.value(labelValues2) == 1
+
+  test "sample rate":
+    declareCounter sCounter, "counter with a sample rate set", registry = registry, sampleRate = 0.5
+    sCounter.inc()
+    # No sampling done on our side, just in sending the increments to a StatsD server
+    check sCounter.value == 1
 
 suite "gauge":
   setup:
