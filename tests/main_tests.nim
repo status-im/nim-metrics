@@ -132,14 +132,14 @@ suite "counter":
     declareCounter cCounter, "counter with colons in name", registry = registry, name = "foo:bar:baz"
     cCounter.inc()
     check cCounter.value == 1
-    check cCounter.valueByName("foo:bar:baz") == 1
+    check cCounter.valueByName("foo:bar:baz_total") == 1
     # echo cCounter
 
     var myName = "bla:bla"
     declareCounter cCounter2, "another counter with colon in name", registry = registry, name = myName
     cCounter2.inc()
     check cCounter2.value == 1
-    check cCounter2.valueByName("bla:bla") == 1
+    check cCounter2.valueByName("bla:bla_total") == 1
     # echo cCounter2
 
 suite "gauge":
