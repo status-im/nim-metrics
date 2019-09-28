@@ -225,13 +225,13 @@ proc `$`*(registry: Registry): string =
 when defined(metrics):
   proc newCounterMetrics(name: string, labels, labelValues: LabelsParam): seq[Metric] =
     result = @[
-      Metric(name: name,
+      Metric(name: name & "_total",
             labels: @labels,
             labelValues: @labelValues),
       Metric(name: name & "_created",
             labels: @labels,
             labelValues: @labelValues,
-            value: getTime().toMilliseconds().float64),
+            value: getTime().toUnix().float64),
     ]
 
   proc validateCounterLabelValues(counter: Counter, labelValues: LabelsParam): Labels =
@@ -355,6 +355,10 @@ when defined(metrics):
       Metric(name: name,
             labels: @labels,
             labelValues: @labelValues),
+      Metric(name: name & "_created",
+            labels: @labels,
+            labelValues: @labelValues,
+            value: getTime().toUnix().float64),
     ]
 
   proc validateGaugeLabelValues(gauge: Gauge, labelValues: LabelsParam): Labels =
@@ -503,7 +507,7 @@ when defined(metrics):
       Metric(name: name & "_created",
             labels: @labels,
             labelValues: @labelValues,
-            value: getTime().toMilliseconds().float64),
+            value: getTime().toUnix().float64),
     ]
 
   proc validateSummaryLabelValues(summary: Summary, labelValues: LabelsParam): Labels =
@@ -594,7 +598,7 @@ when defined(metrics):
       Metric(name: name & "_created",
             labels: @labels,
             labelValues: @labelValues,
-            value: getTime().toMilliseconds().float64),
+            value: getTime().toUnix().float64),
     ]
     var bucketLabels = @labels & "le"
     for bucket in buckets:
@@ -713,7 +717,7 @@ when defined(metrics):
 
     waitFor server.serve(port, cb, address)
 
-proc startHttpServer*(address = "127.0.0.1", port = Port(9093)) =
+proc startHttpServer*(address = "127.0.0.1", port = Port(8000)) =
   when defined(metrics):
     httpServerThread.createThread(httpServer, (address, port))
 
@@ -760,7 +764,11 @@ when defined(metrics) and defined(linux):
       return
 
     var timestamp = getTime().toMilliseconds()
-    let selfStat = readFile("/proc/self/stat").split(' ')[2..^1]
+    # the content of /proc/self/stat looks like this (the command name may contain spaces):
+    #
+    # $ cat /proc/self/stat
+    # 30494 (cat) R 3022 30494 3022 34830 30494 4210688 98 0 0 0 0 0 0 0 20 0 1 0 73800491 10379264 189 18446744073709551615 94060049248256 94060049282149 140735229395104 0 0 0 0 0 0 0 0 0 17 6 0 0 0 0 0 94060049300560 94060049302112 94060076990464 140735229397011 140735229397031 140735229397031 140735229403119 0
+    let selfStat = readFile("/proc/self/stat").split(") ")[^1].split(' ')
     result[@[]] = @[
       Metric(
         name: "process_virtual_memory_bytes", # Virtual memory size in bytes.
@@ -827,12 +835,12 @@ when defined(metrics):
 
     result[@[]] = @[
       Metric(
-        name: "nim_gc_total_mem_bytes", # the number of bytes that are owned by the process
+        name: "nim_gc_mem_bytes", # the number of bytes that are owned by the process
         value: getTotalMem().float64,
         timestamp: timestamp,
       ),
       Metric(
-        name: "nim_gc_occupied_mem_bytes", # the number of bytes that are owned by the process and hold data
+        name: "nim_gc_mem_occupied_bytes", # the number of bytes that are owned by the process and hold data
         value: getOccupiedMem().float64,
         timestamp: timestamp,
       ),

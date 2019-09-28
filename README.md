@@ -127,7 +127,7 @@ This will print out:
 # TYPE mySummary summary
 mySummary_sum 10.5 1569332171696
 mySummary_count 2.0 1569332171696
-mySummary_created 1569332171696.0
+mySummary_created 1569332171.0
 ```
 
 ```nim
@@ -169,7 +169,7 @@ This will print out:
 # TYPE withCustomBuckets histogram
 withCustomBuckets_sum 6.7 1569334493506
 withCustomBuckets_count 4.0 1569334493506
-withCustomBuckets_created 1569334493506.0
+withCustomBuckets_created 1569334493.0
 withCustomBuckets_bucket{le="0.0"} 0.0
 withCustomBuckets_bucket{le="1.0"} 2.0 1569334493506
 withCustomBuckets_bucket{le="2.0"} 3.0 1569334493506
@@ -206,10 +206,10 @@ echo lCounter
 ```text
 # HELP lCounter example counter with labels
 # TYPE lCounter counter
-lCounter{foo="1",bar="a"} 1.0 1569340503703
-lCounter_created{foo="1",bar="a"} 1569340503703.0
-lCounter{foo="2",bar="b"} 1.0 1569340503703
-lCounter_created{foo="2",bar="b"} 1569340503703.0
+lCounter_total{foo="1",bar="a"} 1.0 1569340503703
+lCounter_created{foo="1",bar="a"} 1569340503.0
+lCounter_total{foo="2",bar="b"} 1.0 1569340503703
+lCounter_created{foo="2",bar="b"} 1569340503.0
 ```
 
 (OK, there are four metrics in total, because each one gets a `*_created` buddy.)
@@ -238,8 +238,8 @@ echo cCounter
 ```text
 # HELP foo:bar:baz counter with colons in name
 # TYPE foo:bar:baz counter
-foo:bar:baz 1.0 1569341756504
-foo:bar:baz_created 1569341756504.0
+foo:bar:baz_total 1.0 1569341756504
+foo:bar:baz_created 1569341756.0
 ```
 
 ## Logging
@@ -297,7 +297,7 @@ suite "counter":
 
 ## Prometheus endpoint
 
-Start an HTTP server listening on 127.0.0.1:9093 from which the Prometheus
+Start an HTTP server listening on 127.0.0.1:8000 from which the Prometheus
 daemon can pull the metrics from all collectors in `defaultRegistry`, plus the
 default ones:
 
@@ -310,11 +310,11 @@ Or set your own address and port to listen to:
 ```nim
 import metrics, net
 
-startHttpServer("127.0.0.1", Port(9093))
+startHttpServer("127.0.0.1", Port(8000))
 ```
 
 The HTTP server will run in its own thread. You can open
-"http://127.0.0.1:9093/metrics" in a browser to see what Prometheus sees.
+"http://127.0.0.1:8000/metrics" in a browser to see what Prometheus sees.
 
 Default metrics available (see also [the relevant Prometheus docs](https://prometheus.io/docs/instrumenting/writing_clientlibs/#standard-and-runtime-collectors)):
 
@@ -325,8 +325,8 @@ process_max_fds
 process_virtual_memory_bytes
 process_resident_memory_bytes
 process_start_time_seconds
-nim_gc_total_mem_bytes
-nim_gc_occupied_mem_bytes
+nim_gc_mem_bytes
+nim_gc_mem_occupied_bytes
 ```
 
 (These `process_*` metrics are only available on Linux, for now.)
