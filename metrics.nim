@@ -4,6 +4,10 @@
 #   * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+when defined(arm):
+  # ARMv6 workaround - TODO upstream to Nim atomics
+  {.passl:"-latomic".}
+
 import algorithm, hashes, locks, net, os, random, re, sequtils, sets, strutils, tables, times
 
 type
