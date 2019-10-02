@@ -331,6 +331,10 @@ nim_gc_mem_occupied_bytes
 
 (These `process_*` metrics are only available on Linux, for now.)
 
+Screenshot of [Grafana showing data from Prometheus that pulls it from Nimbus which uses nim-metrics](https://github.com/status-im/nimbus/tree/devel#metric-visualisation):
+
+![Grafana screenshot](https://i.imgur.com/AdtavDA.png)
+
 ## StatsD
 
 Add a [StatsD](https://github.com/statsd/statsd/wiki) export backend where
