@@ -138,17 +138,20 @@ when defined(metrics):
   method collect*(collector: Collector): Metrics {.base.} =
     return collector.metrics
 
-  proc toTextLines*(collector: Collector, metricsTable: Metrics): seq[string] =
+  proc toTextLines*(collector: Collector, metricsTable: Metrics, showTimestamp = true): seq[string] =
     result = @[
       "# HELP $# $#" % [collector.name, collector.help.processHelp()],
       "# TYPE $# $#" % [collector.name, collector.typ],
     ]
     for labelValues, metrics in metricsTable:
       for metric in metrics:
-        result.add($metric)
+        result.add(metric.toText(showTimestamp))
+
+  proc toText*(collector: Collector, showTimestamp = true): string =
+    collector.toTextLines(collector.metrics, showTimestamp).join("\n")
 
   proc `$`*(collector: Collector): string =
-    collector.toTextLines(collector.metrics).join("\n")
+    collector.toText()
 
 proc `$`*(collector: type IgnoredCollector): string = ""
 
@@ -214,13 +217,16 @@ proc collect*(registry: Registry): OrderedTable[Collector, Metrics] =
         deepCopy(collectorCopy, collector)
         result[collectorCopy] = collectorCopy.collect()
 
-proc `$`*(registry: Registry): string =
+proc toText*(registry: Registry, showTimestamp = true): string =
   when defined(metrics):
     var res: seq[string] = @[]
     for collector, metricsTable in registry.collect():
-      res.add(collector.toTextLines(metricsTable))
+      res.add(collector.toTextLines(metricsTable, showTimestamp))
       res.add("")
     return res.join("\n")
+
+proc `$`*(registry: Registry): string =
+  registry.toText()
 
 ###########
 # counter #
@@ -698,33 +704,6 @@ template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: 
   when defined(metrics):
     {.gcsafe.}: observeHistogram(histogram, amount, labelValues)
 
-###############
-# HTTP server #
-###############
-
-import asynchttpserver, asyncdispatch
-
-when defined(metrics):
-  type HttpServerArgs = tuple[address: string, port: Port]
-  var httpServerThread: Thread[HttpServerArgs]
-
-  proc httpServer(args: HttpServerArgs) {.thread.} =
-    let (address, port) = args
-    var server = newAsyncHttpServer()
-
-    proc cb(req: Request) {.async.} =
-      if req.url.path == "/metrics":
-        {.gcsafe.}:
-          await req.respond(Http200, $defaultRegistry, newHttpHeaders([("Content-Type", CONTENT_TYPE)]))
-      else:
-        await req.respond(Http404, "Try /metrics")
-
-    waitFor server.serve(port, cb, address)
-
-proc startHttpServer*(address = "127.0.0.1", port = Port(8000)) =
-  when defined(metrics):
-    httpServerThread.createThread(httpServer, (address, port))
-
 ################
 # process info #
 ################
@@ -850,6 +829,37 @@ when defined(metrics):
       ),
     ]
     # TODO: parse the output of `GC_getStatistics()` for more stats
+
+################################
+# HTTP server (for Prometheus) #
+################################
+
+import asynchttpserver, asyncdispatch
+
+when defined(metrics):
+  type HttpServerArgs = tuple[address: string, port: Port]
+  var httpServerThread: Thread[HttpServerArgs]
+
+  proc httpServer(args: HttpServerArgs) {.thread.} =
+    let (address, port) = args
+    var server = newAsyncHttpServer()
+
+    proc cb(req: Request) {.async.} =
+      if req.url.path == "/metrics":
+        {.gcsafe.}:
+          # Prometheus will drop our metrics in surprising ways if we give it
+          # timestamps, so we don't.
+          await req.respond(Http200,
+                            defaultRegistry.toText(showTimestamp = false),
+                            newHttpHeaders([("Content-Type", CONTENT_TYPE)]))
+      else:
+        await req.respond(Http404, "Try /metrics")
+
+    waitFor server.serve(port, cb, address)
+
+proc startHttpServer*(address = "127.0.0.1", port = Port(8000)) =
+  when defined(metrics):
+    httpServerThread.createThread(httpServer, (address, port))
 
 #######################################
 # export metrics to StatsD and Carbon #
