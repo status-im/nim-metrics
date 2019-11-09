@@ -8,7 +8,9 @@ when defined(arm):
   # ARMv6 workaround - TODO upstream to Nim atomics
   {.passl:"-latomic".}
 
-import algorithm, hashes, locks, net, os, random, re, sequtils, sets, strutils, tables, times
+import locks, net, os, re, sets, tables, times
+when defined(metrics):
+  import algorithm, hashes, random, sequtils, strutils
 
 type
   Labels* = seq[string]
@@ -836,9 +838,9 @@ when defined(metrics):
 # HTTP server (for Prometheus) #
 ################################
 
-import asynchttpserver, asyncdispatch
-
 when defined(metrics):
+  import asynchttpserver, asyncdispatch
+
   type HttpServerArgs = tuple[address: string, port: Port]
   var httpServerThread: Thread[HttpServerArgs]
 
@@ -903,7 +905,6 @@ when defined(metrics):
     exportThread: Thread[void]
     sockets: seq[Socket] = @[] # we maintain one socket per backend
     lastConnectionTime: seq[times.Time] = @[] # last time we tried to connect the corresponding socket
-    epochStart = initTime(0, 0)
 
   initLock(exportBackendsLock)
   exportChan.open(maxItems = METRIC_EXPORT_BUFER_SIZE)
@@ -974,8 +975,6 @@ when defined(metrics):
     var
       data: ExportedMetric # received from the channel
       payload: string
-      i: int
-      backend: ExportBackend
       finalValue: float64
       sampleString: string
 

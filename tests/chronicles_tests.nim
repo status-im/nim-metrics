@@ -5,8 +5,11 @@
 #   * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import chronicles, tables, unittest,
+import chronicles, unittest,
       ../metrics, ../metrics/chronicles_support
+
+when defined(metrics):
+  import tables
 
 suite "logging":
   test "info":

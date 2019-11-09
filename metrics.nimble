@@ -15,8 +15,10 @@ proc buildBinary(name: string, srcDir = "./", params = "", lang = "c") =
   if not dirExists "build":
     mkDir "build"
   var extra_params = params
-  for i in 2..<paramCount():
-    extra_params &= " " & paramStr(i)
+  if paramStr(1) != "e":
+    # we're under Nim, not Nimble
+    for i in 2..<paramCount():
+      extra_params &= " " & paramStr(i)
   exec "nim " & lang & " --out:./build/" & name & " -f --skipParentCfg " & extra_params & " " & srcDir & name & ".nim"
 
 proc test(name: string) =
