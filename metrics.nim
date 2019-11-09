@@ -64,7 +64,9 @@ when defined(metrics):
     while true:
       atomicLoad(cast[ptr int64](dest), cast[ptr int64](oldVal.addr), ATOMIC_SEQ_CST)
       newVal = oldVal + amount
-      if atomicCompareExchange(cast[ptr int64](dest), cast[ptr int64](oldVal.addr), cast[ptr int64](newVal.addr), false, ATOMIC_SEQ_CST, ATOMIC_SEQ_CST):
+      # the "weak" version is safe in a loop and it's more efficient than the
+      # "strong" version that uses a loop of its own (specially on ARM)
+      if atomicCompareExchange(cast[ptr int64](dest), cast[ptr int64](oldVal.addr), cast[ptr int64](newVal.addr), weak = true, ATOMIC_SEQ_CST, ATOMIC_SEQ_CST):
         break
 
   template processHelp*(help: string): string =
@@ -331,7 +333,7 @@ template countExceptions*(counter: Counter | type IgnoredCollector, typ: typedes
     try:
       body
     except typ:
-      counter.inc(labelValues = labelValues)
+      counter.inc(1, labelValues)
       raise
   else:
     body
@@ -470,9 +472,9 @@ proc setToCurrentTime*(gauge: Gauge | type IgnoredCollector, labelValues: Labels
 
 template trackInProgress*(gauge: Gauge | type IgnoredCollector, labelValues: LabelsParam, body: untyped) =
   when defined(metrics) and gauge is not IgnoredCollector:
-    gauge.inc(labelValues = labelValues)
+    gauge.inc(1, labelValues)
     body
-    gauge.dec(labelValues = labelValues)
+    gauge.dec(1, labelValues)
   else:
     body
 
@@ -489,7 +491,7 @@ template time*(gauge: Gauge | type IgnoredCollector, labelValues: LabelsParam, b
   when defined(metrics) and gauge is not IgnoredCollector:
     let start = times.toUnix(getTime())
     body
-    gauge.set(times.toUnix(getTime()) - start, labelValues = labelValues)
+    gauge.set(times.toUnix(getTime()) - start, labelValues)
   else:
     body
 
@@ -587,7 +589,7 @@ template time*(collector: Summary | Histogram, labelValues: LabelsParam, body: u
   when defined(metrics):
     let start = times.toUnix(getTime())
     body
-    collector.observe(times.toUnix(getTime()) - start, labelValues = labelValues)
+    collector.observe(times.toUnix(getTime()) - start, labelValues)
   else:
     body
 
