@@ -6,10 +6,11 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 from chronicles import formatIt, expandIt
-import sets, tables,
-      ../metrics
+import ../metrics
 
 when defined(metrics):
+  import tables
+
   formatIt(Metric):
     it.toText(showTimestamp = false)
 
