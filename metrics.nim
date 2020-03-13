@@ -11,6 +11,8 @@ when defined(arm):
 import locks, net, os, re, sets, tables, times
 when defined(metrics):
   import algorithm, hashes, random, sequtils, strutils
+  when defined(posix):
+    import posix
 
 type
   Labels* = seq[string]
@@ -55,7 +57,7 @@ const CONTENT_TYPE* = "text/plain; version=0.0.4; charset=utf-8"
 #########
 
 when defined(metrics):
-  proc toMilliseconds*(time: Time): int64 =
+  proc toMilliseconds*(time: times.Time): int64 =
     return convert(Seconds, Milliseconds, time.toUnix()) + convert(Nanoseconds, Milliseconds, time.nanosecond())
 
   proc atomicAdd*(dest: ptr float64, amount: float64) =
@@ -977,6 +979,16 @@ when defined(metrics):
       payload: string
       finalValue: float64
       sampleString: string
+
+    # Block all signals in this thread, so we don't interfere with regular signal
+    # handling elsewhere.
+    when defined(posix):
+      var signalMask, oldSignalMask: Sigset
+
+      if sigfillset(signalMask) != 0 or
+        sigprocmask(SIG_BLOCK, signalMask, oldSignalMask) != 0:
+        echo osErrorMsg(osLastError())
+        quit(QuitFailure)
 
     # seed the simple PRNG we're using for sample rates
     randomize()
