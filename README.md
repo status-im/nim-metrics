@@ -327,9 +327,14 @@ process_resident_memory_bytes
 process_start_time_seconds
 nim_gc_mem_bytes
 nim_gc_mem_occupied_bytes
+nim_gc_heap_instance_occupied_bytes[type_name]
 ```
 
-(These `process_*` metrics are only available on Linux, for now.)
+The `process_*` metrics are only available on Linux, for now.
+
+`nim_gc_heap_instance_occupied_bytes` is only available when compiling with
+`-d:nimTypeNames` and holds the top 5 instance types, in reverse order of their
+total heap usage, at the time the metric is created.
 
 Screenshot of [Grafana showing data from Prometheus that pulls it from Nimbus which uses nim-metrics](https://github.com/status-im/nimbus/tree/devel#metric-visualisation):
 

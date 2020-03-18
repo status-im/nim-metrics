@@ -836,6 +836,27 @@ when defined(metrics):
     ]
     # TODO: parse the output of `GC_getStatistics()` for more stats
 
+    when defined(nimTypeNames):
+      const topHeapObjects = 5
+      var heapSizes = initOrderedTable[cstring, int]()
+      for data in dumpHeapInstances():
+        heapSizes[data.name] = data.sizes
+      heapSizes.sort(proc (x, y: (cstring, int)): int = cmp(x[1], y[1]), SortOrder.Descending)
+      var i = 0
+      for typeName, size in heapSizes.pairs():
+        inc i
+        if i >= topHeapObjects:
+          break
+        result[@[]].add(
+          Metric(
+            name: "nim_gc_heap_instance_occupied_bytes", # total bytes occupied by instance type
+            value: size.float64,
+            timestamp: timestamp,
+            labels: @["type_name"],
+            labelValues: @[$typeName],
+          )
+        )
+
 ################################
 # HTTP server (for Prometheus) #
 ################################
