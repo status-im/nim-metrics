@@ -164,7 +164,8 @@ proc `$`*(collector: type IgnoredCollector): string = ""
 # for testing
 template value*(collector: Collector | type IgnoredCollector, labelValues: LabelsParam = @[]): float64 =
   when defined(metrics) and collector is not IgnoredCollector:
-    collector.metrics[@labelValues][0].value
+    {.gcsafe.}:
+      collector.metrics[@labelValues][0].value
   else:
     0.0
 
