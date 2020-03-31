@@ -1008,7 +1008,7 @@ when defined(metrics):
       var signalMask, oldSignalMask: Sigset
 
       if sigfillset(signalMask) != 0 or
-        sigprocmask(SIG_BLOCK, signalMask, oldSignalMask) != 0:
+        pthread_sigmask(SIG_BLOCK, signalMask, oldSignalMask) != 0:
         echo osErrorMsg(osLastError())
         quit(QuitFailure)
 
