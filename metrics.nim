@@ -115,6 +115,18 @@ when defined(metrics):
       if label in invalidLabelNames:
         raise newException(ValueError, "Invalid label: '" & label & "'. It should not be one of: " & $invalidLabelNames & ".")
 
+  proc ignoreSignalsInThread() =
+    # Block all signals in this thread, so we don't interfere with regular signal
+    # handling elsewhere.
+    when defined(posix):
+      var signalMask, oldSignalMask: Sigset
+
+      # sigprocmask() doesn't work on macOS, for multithreaded programs
+      if sigfillset(signalMask) != 0 or
+        pthread_sigmask(SIG_BLOCK, signalMask, oldSignalMask) != 0:
+        echo osErrorMsg(osLastError())
+        quit(QuitFailure)
+
 ######################
 # generic collectors #
 ######################
@@ -869,6 +881,8 @@ when defined(metrics):
   var httpServerThread: Thread[HttpServerArgs]
 
   proc httpServer(args: HttpServerArgs) {.thread.} =
+    ignoreSignalsInThread()
+
     let (address, port) = args
     var server = newAsyncHttpServer()
 
@@ -996,21 +1010,13 @@ when defined(metrics):
       sockets[i] = nil
 
   proc pushMetricsWorker() {.thread.} =
+    ignoreSignalsInThread()
+
     var
       data: ExportedMetric # received from the channel
       payload: string
       finalValue: float64
       sampleString: string
-
-    # Block all signals in this thread, so we don't interfere with regular signal
-    # handling elsewhere.
-    when defined(posix):
-      var signalMask, oldSignalMask: Sigset
-
-      if sigfillset(signalMask) != 0 or
-        pthread_sigmask(SIG_BLOCK, signalMask, oldSignalMask) != 0:
-        echo osErrorMsg(osLastError())
-        quit(QuitFailure)
 
     # seed the simple PRNG we're using for sample rates
     randomize()
