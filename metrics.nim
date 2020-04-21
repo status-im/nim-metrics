@@ -105,7 +105,7 @@ when defined(metrics):
         try:
           textLabels.add("$#=\"$#\"" % [metric.labels[i], metric.labelValues[i].processLabelValue()])
         except ValueError:
-          textLabels.add(metric.labels[i] & "=error") # whatever
+          textLabels.add(metric.labels[i] & "=\"ValueError\"")
       result.add(textLabels.join(","))
       result.add('}')
     result.add(" " & $metric.value)
