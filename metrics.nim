@@ -4,6 +4,23 @@
 #   * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+# Exceptions coming out of this library are mostly handled but due to bugs
+# in nim exception tracking and deficiencies in the standard library, not quite
+# all exceptions can be tracked - use at your own risk.
+#
+# When we do manage to catch an unexpected exception, we'll do one of several
+# things:
+# * Show the error to the user (for example on the polling web page or through
+#   an error metric) - this strategy is used mostly when rendering metrics
+#   or sending them to collection servers
+# * Raise a tracked exception - we use this strategy during collector
+#   registration
+# * Try to print the message to stderr - this is used if a registered collector
+#   fails to update the metrics for any reason
+# * Crash - the exception handling is a work in progress
+
+{.push raises: [Defect].} # Disabled further down for some parts of the code
+
 when defined(arm):
   # ARMv6 workaround - TODO upstream to Nim atomics
   {.passl:"-latomic".}
@@ -48,7 +65,7 @@ type
     lock*: Lock
     collectors*: OrderedSet[Collector]
 
-  RegistrationError* = object of Exception
+  RegistrationError* = object of CatchableError
 
 const CONTENT_TYPE* = "text/plain; version=0.0.4; charset=utf-8"
 
@@ -85,7 +102,10 @@ when defined(metrics):
       result.add('{')
       var textLabels: seq[string] = @[]
       for i in 0..metric.labels.high:
-        textLabels.add("$#=\"$#\"" % [metric.labels[i], metric.labelValues[i].processLabelValue()])
+        try:
+          textLabels.add("$#=\"$#\"" % [metric.labels[i], metric.labelValues[i].processLabelValue()])
+        except ValueError:
+          textLabels.add(metric.labels[i] & "=error") # whatever
       result.add(textLabels.join(","))
       result.add('}')
     result.add(" " & $metric.value)
@@ -102,11 +122,11 @@ when defined(metrics):
     labelRegexStr {.global.} = r"^[a-zA-Z_][a-zA-Z0-9_]*$"
     labelRegex {.global.} = re(labelRegexStr)
 
-  proc validateName(name: string) =
+  proc validateName(name: string) {.raises: [Defect, ValueError].} =
     if not name.contains(nameRegex):
       raise newException(ValueError, "Invalid name: '" & name & "'. It should match the regex: " & nameRegexStr)
 
-  proc validateLabels(labels: LabelsParam, invalidLabelNames: openArray[string] = []) =
+  proc validateLabels(labels: LabelsParam, invalidLabelNames: openArray[string] = []) {.raises: [Defect, ValueError].} =
     for label in labels:
       if not label.contains(labelRegex):
         raise newException(ValueError, "Invalid label: '" & label & "'. It should match the regex: '" & labelRegexStr & "'.")
@@ -135,7 +155,7 @@ when defined(metrics):
   template getEmptyLabelValues*(collector: Collector): Labels =
     sequtils.repeat("", len(collector.labels))
 
-  proc validateLabelValues*(collector: Collector, labelValues: LabelsParam): Labels =
+  proc validateLabelValues*(collector: Collector, labelValues: LabelsParam): Labels {.raises: [Defect, ValueError].} =
     if labelValues.len == 0:
       result = collector.getEmptyLabelValues()
     elif labelValues.len != collector.labels.len:
@@ -157,13 +177,16 @@ when defined(metrics):
     return collector.metrics
 
   proc toTextLines*(collector: Collector, metricsTable: Metrics, showTimestamp = true): seq[string] =
-    result = @[
-      "# HELP $# $#" % [collector.name, collector.help.processHelp()],
-      "# TYPE $# $#" % [collector.name, collector.typ],
-    ]
-    for labelValues, metrics in metricsTable:
-      for metric in metrics:
-        result.add(metric.toText(showTimestamp))
+    try:
+      result = @[
+        "# HELP $# $#" % [collector.name, collector.help.processHelp()],
+        "# TYPE $# $#" % [collector.name, collector.typ],
+      ]
+      for labelValues, metrics in metricsTable:
+        for metric in metrics:
+          result.add(metric.toText(showTimestamp))
+    except ValueError as e:
+      result = @["metrics: " & e.msg] # whatever
 
   proc toText*(collector: Collector, showTimestamp = true): string =
     collector.toTextLines(collector.metrics, showTimestamp).join("\n")
@@ -185,7 +208,7 @@ template value*(collector: Collector | type IgnoredCollector, labelValues: Label
 proc valueByName*(collector: Collector | type IgnoredCollector,
                   metricName: string,
                   labelValues: LabelsParam = @[],
-                  extraLabelValues: LabelsParam = @[]): float64 =
+                  extraLabelValues: LabelsParam = @[]): float64 {.raises: [Defect, ValueError].} =
   when defined(metrics) and collector is not IgnoredCollector:
     let allLabelValues = @labelValues & @extraLabelValues
     for metric in collector.metrics[@labelValues]:
@@ -209,7 +232,7 @@ var defaultRegistry* {.global.} = newRegistry()
 
 # We use a generic type here in order to avoid the hidden type casting of
 # Collector child types to the parent type.
-proc register* [T] (collector: T, registry = defaultRegistry) =
+proc register* [T] (collector: T, registry = defaultRegistry) {.raises: [Defect, RegistrationError].} =
   when defined(metrics):
     withLock registry.lock:
       if collector in registry.collectors:
@@ -217,7 +240,7 @@ proc register* [T] (collector: T, registry = defaultRegistry) =
 
       registry.collectors.incl(collector)
 
-proc unregister* [T] (collector: T, registry = defaultRegistry) =
+proc unregister* [T] (collector: T, registry = defaultRegistry) {.raises: [Defect, RegistrationError].} =
   when defined(metrics) and collector is not IgnoredCollector:
     withLock registry.lock:
       if collector notin registry.collectors:
@@ -263,14 +286,14 @@ when defined(metrics):
             value: getTime().toUnix().float64),
     ]
 
-  proc validateCounterLabelValues(counter: Counter, labelValues: LabelsParam): Labels =
+  proc validateCounterLabelValues(counter: Counter, labelValues: LabelsParam): Labels {.raises: [Defect, ValueError].} =
     result = validateLabelValues(counter, labelValues)
     if result notin counter.metrics:
       counter.metrics[result] = newCounterMetrics(counter.name, counter.labels, result)
 
   # don't document this one, even if we're forced to make it public, because it
   # won't work when all (or some) collectors are disabled
-  proc newCounter*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry, sampleRate = 1.float): Counter =
+  proc newCounter*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry, sampleRate = 1.float): Counter  {.raises: [Defect, ValueError, RegistrationError].} =
     validateName(name)
     validateLabels(labels)
     result = Counter(name: name,
@@ -312,7 +335,7 @@ template declarePublicCounter*(identifier: untyped,
 #- different collector types with the same names are allowed
 #- don't mark this proc as {.inline.} because it's incompatible with {.global.}: https://github.com/status-im/nim-metrics/pull/5#discussion_r304687474
 when defined(metrics):
-  proc counter*(name: static string): Counter =
+  proc counter*(name: static string): Counter {.raises: [Defect, ValueError, RegistrationError].} =
     # This {.global.} var assignment is lifted from the procedure and placed in a
     # special module init section that's guaranteed to run only once per program.
     # Calls to this proc will just return the globally initialised variable.
@@ -324,22 +347,28 @@ else:
 
 proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
-    var timestamp = getTime().toMilliseconds()
+    try:
+      var timestamp = getTime().toMilliseconds()
 
-    if amount < 0:
-      raise newException(ValueError, "Counter.inc() cannot be used with negative amounts.")
+      if amount < 0:
+        raise newException(ValueError, "Counter.inc() cannot be used with negative amounts.")
 
-    let labelValuesCopy = validateCounterLabelValues(counter, labelValues)
+      let labelValuesCopy = validateCounterLabelValues(counter, labelValues)
 
-    atomicAdd(counter.metrics[labelValuesCopy][0].value.addr, amount.float64)
-    atomicStore(cast[ptr int64](counter.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+      atomicAdd(counter.metrics[labelValuesCopy][0].value.addr, amount.float64)
+      atomicStore(cast[ptr int64](counter.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
 
-    pushMetrics(name = counter.name,
-                value = counter.metrics[labelValuesCopy][0].value,
-                increment = amount.float64,
-                metricType = "c",
-                timestamp = timestamp,
-                sampleRate = counter.sampleRate)
+      pushMetrics(name = counter.name,
+                  value = counter.metrics[labelValuesCopy][0].value,
+                  increment = amount.float64,
+                  metricType = "c",
+                  timestamp = timestamp,
+                  sampleRate = counter.sampleRate)
+    except Exception as e:
+      try:
+        write stderr, "metrics: " & e.msg
+      except IOError:
+        discard
 
 template inc*(counter: Counter | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics) and counter is not IgnoredCollector:
@@ -390,12 +419,12 @@ when defined(metrics):
             value: getTime().toUnix().float64),
     ]
 
-  proc validateGaugeLabelValues(gauge: Gauge, labelValues: LabelsParam): Labels =
+  proc validateGaugeLabelValues(gauge: Gauge, labelValues: LabelsParam): Labels  {.raises: [Defect, ValueError].} =
     result = validateLabelValues(gauge, labelValues)
     if result notin gauge.metrics:
       gauge.metrics[result] = newGaugeMetrics(gauge.name, gauge.labels, result)
 
-  proc newGauge*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry): Gauge =
+  proc newGauge*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry): Gauge {.raises: [Defect, ValueError, RegistrationError].} =
     validateName(name)
     validateLabels(labels)
     result = Gauge(name: name,
@@ -420,7 +449,7 @@ template declareGauge*(identifier: untyped,
 
 # alternative API
 when defined(metrics):
-  proc gauge*(name: static string): Gauge =
+  proc gauge*(name: static string): Gauge {.raises: [Defect, ValueError, RegistrationError].} =
     var res {.global.} = newGauge(name, "") # lifted line
     return res
 else:
@@ -439,17 +468,23 @@ template declarePublicGauge*(identifier: untyped,
 
 proc incGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
-    var timestamp = getTime().toMilliseconds()
+    try:
+      var timestamp = getTime().toMilliseconds()
 
-    let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
+      let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
 
-    atomicAdd(gauge.metrics[labelValuesCopy][0].value.addr, amount.float64)
-    atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+      atomicAdd(gauge.metrics[labelValuesCopy][0].value.addr, amount.float64)
+      atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
 
-    pushMetrics(name = gauge.name,
-                value = gauge.metrics[labelValuesCopy][0].value,
-                metricType = "g",
-                timestamp = timestamp)
+      pushMetrics(name = gauge.name,
+                  value = gauge.metrics[labelValuesCopy][0].value,
+                  metricType = "g",
+                  timestamp = timestamp)
+    except Exception as e:
+      try:
+        write stderr, "metrics: " & e.msg
+      except IOError:
+        discard
 
 proc decGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
@@ -457,17 +492,23 @@ proc decGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam 
 
 proc setGauge(gauge: Gauge, value: int64|float64, labelValues: LabelsParam = @[]) =
   when defined(metrics):
-    var timestamp = getTime().toMilliseconds()
+    try:
+      var timestamp = getTime().toMilliseconds()
 
-    let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
+      let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
 
-    atomicStoreN(cast[ptr int64](gauge.metrics[labelValuesCopy][0].value.addr), cast[int64](value.float64), ATOMIC_SEQ_CST)
-    atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+      atomicStoreN(cast[ptr int64](gauge.metrics[labelValuesCopy][0].value.addr), cast[int64](value.float64), ATOMIC_SEQ_CST)
+      atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
 
-    pushMetrics(name = gauge.name,
-                value = value.float64,
-                metricType = "g",
-                timestamp = timestamp)
+      pushMetrics(name = gauge.name,
+                  value = value.float64,
+                  metricType = "g",
+                  timestamp = timestamp)
+    except Exception as e:
+      try:
+        write stderr, "metrics: " & e.msg
+      except IOError:
+        discard
 
 # the "type IgnoredCollector" case is covered by Counter.inc()
 template inc*(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
@@ -539,12 +580,12 @@ when defined(metrics):
             value: getTime().toUnix().float64),
     ]
 
-  proc validateSummaryLabelValues(summary: Summary, labelValues: LabelsParam): Labels =
+  proc validateSummaryLabelValues(summary: Summary, labelValues: LabelsParam): Labels {.raises: [Defect, ValueError].} =
     result = validateLabelValues(summary, labelValues)
     if result notin summary.metrics:
       summary.metrics[result] = newSummaryMetrics(summary.name, summary.labels, result)
 
-  proc newSummary*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry): Summary =
+  proc newSummary*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry): Summary {.raises: [Defect, ValueError, RegistrationError].} =
     validateName(name)
     validateLabels(labels, invalidLabelNames = ["quantile"])
     result = Summary(name: name,
@@ -578,7 +619,7 @@ template declarePublicSummary*(identifier: untyped,
     type identifier* = IgnoredCollector
 
 when defined(metrics):
-  proc summary*(name: static string): Summary =
+  proc summary*(name: static string): Summary {.raises: [Defect, ValueError, RegistrationError].} =
     var res {.global.} = newSummary(name, "") # lifted line
     return res
 else:
@@ -587,14 +628,20 @@ else:
 
 proc observeSummary(summary: Summary, amount: int64|float64, labelValues: LabelsParam = @[]) =
   when defined(metrics):
-    var timestamp = getTime().toMilliseconds()
+    try:
+      var timestamp = getTime().toMilliseconds()
 
-    let labelValuesCopy = validateSummaryLabelValues(summary, labelValues)
+      let labelValuesCopy = validateSummaryLabelValues(summary, labelValues)
 
-    atomicAdd(summary.metrics[labelValuesCopy][0].value.addr, amount.float64) # _sum
-    atomicStore(cast[ptr int64](summary.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
-    atomicAdd(summary.metrics[labelValuesCopy][1].value.addr, 1.float64) # _count
-    atomicStore(cast[ptr int64](summary.metrics[labelValuesCopy][1].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+      atomicAdd(summary.metrics[labelValuesCopy][0].value.addr, amount.float64) # _sum
+      atomicStore(cast[ptr int64](summary.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+      atomicAdd(summary.metrics[labelValuesCopy][1].value.addr, 1.float64) # _count
+      atomicStore(cast[ptr int64](summary.metrics[labelValuesCopy][1].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+    except Exception as e:
+      try:
+        write stderr, "metrics: " & e.msg
+      except IOError:
+        discard
 
 template observe*(summary: Summary | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics) and summary is not IgnoredCollector:
@@ -640,7 +687,7 @@ when defined(metrics):
               labelValues: @labelValues & bucketStr)
       )
 
-  proc validateHistogramLabelValues(histogram: Histogram, labelValues: LabelsParam): Labels =
+  proc validateHistogramLabelValues(histogram: Histogram, labelValues: LabelsParam): Labels {.raises: [Defect, ValueError].} =
     result = validateLabelValues(histogram, labelValues)
     if result notin histogram.metrics:
       histogram.metrics[result] = newHistogramMetrics(histogram.name, histogram.labels, result, histogram.buckets)
@@ -649,7 +696,7 @@ when defined(metrics):
                     help: string,
                     labels: LabelsParam = @[],
                     registry = defaultRegistry,
-                    buckets: openArray[float64] = defaultHistogramBuckets): Histogram =
+                    buckets: openArray[float64] = defaultHistogramBuckets): Histogram {.raises: [Defect, ValueError, RegistrationError].} =
     validateName(name)
     validateLabels(labels, invalidLabelNames = ["le"])
     var bucketsSeq = @buckets
@@ -693,7 +740,7 @@ template declarePublicHistogram*(identifier: untyped,
     type identifier* = IgnoredCollector
 
 when defined(metrics):
-  proc histogram*(name: static string): Histogram =
+  proc histogram*(name: static string): Histogram {.raises: [Defect, ValueError, RegistrationError].} =
     var res {.global.} = newHistogram(name, "") # lifted line
     return res
 else:
@@ -702,21 +749,27 @@ else:
 
 proc observeHistogram(histogram: Histogram, amount: int64|float64, labelValues: LabelsParam = @[]) =
   when defined(metrics):
-    var timestamp = getTime().toMilliseconds()
+    try:
+      var timestamp = getTime().toMilliseconds()
 
-    let labelValuesCopy = validateHistogramLabelValues(histogram, labelValues)
+      let labelValuesCopy = validateHistogramLabelValues(histogram, labelValues)
 
-    atomicAdd(histogram.metrics[labelValuesCopy][0].value.addr, amount.float64) # _sum
-    atomicStore(cast[ptr int64](histogram.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
-    atomicAdd(histogram.metrics[labelValuesCopy][1].value.addr, 1.float64) # _count
-    atomicStore(cast[ptr int64](histogram.metrics[labelValuesCopy][1].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
-    for i, bucket in histogram.buckets:
-      if amount.float64 <= bucket:
-        #- "le" probably stands for "less or equal"
-        #- the same observed value can increase multiple buckets, because this is
-        #  a cumulative histogram
-        atomicAdd(histogram.metrics[labelValuesCopy][i + 3].value.addr, 1.float64) # _bucket{le="<bucket value>"}
-        atomicStore(cast[ptr int64](histogram.metrics[labelValuesCopy][i + 3].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+      atomicAdd(histogram.metrics[labelValuesCopy][0].value.addr, amount.float64) # _sum
+      atomicStore(cast[ptr int64](histogram.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+      atomicAdd(histogram.metrics[labelValuesCopy][1].value.addr, 1.float64) # _count
+      atomicStore(cast[ptr int64](histogram.metrics[labelValuesCopy][1].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+      for i, bucket in histogram.buckets:
+        if amount.float64 <= bucket:
+          #- "le" probably stands for "less or equal"
+          #- the same observed value can increase multiple buckets, because this is
+          #  a cumulative histogram
+          atomicAdd(histogram.metrics[labelValuesCopy][i + 3].value.addr, 1.float64) # _bucket{le="<bucket value>"}
+          atomicStore(cast[ptr int64](histogram.metrics[labelValuesCopy][i + 3].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+    except Exception as e:
+      try:
+        write stderr, "metrics: " & e.msg
+      except IOError:
+        discard
 
 # the "type IgnoredCollector" case is covered by Summary.observe()
 template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
@@ -732,7 +785,7 @@ when defined(metrics) and defined(linux):
 
   type ProcessInfo = ref object of Gauge
 
-  proc newProcessInfo*(name: string, help: string, registry = defaultRegistry): ProcessInfo =
+  proc newProcessInfo*(name: string, help: string, registry = defaultRegistry): ProcessInfo {.raises: [Defect, ValueError, RegistrationError].} =
     validateName(name)
     result = ProcessInfo(name: name,
                         help: help,
@@ -759,59 +812,63 @@ when defined(metrics) and defined(linux):
     pagesize = sysconf(SC_PAGE_SIZE).float64
 
   method collect*(collector: ProcessInfo): Metrics =
+    var timestamp = getTime().toMilliseconds()
     result = initOrderedTable[Labels, seq[Metric]]()
     result[@[]] = @[]
-    if btime == 0:
-      # we couldn't access /proc
-      return
 
-    var timestamp = getTime().toMilliseconds()
-    # the content of /proc/self/stat looks like this (the command name may contain spaces):
-    #
-    # $ cat /proc/self/stat
-    # 30494 (cat) R 3022 30494 3022 34830 30494 4210688 98 0 0 0 0 0 0 0 20 0 1 0 73800491 10379264 189 18446744073709551615 94060049248256 94060049282149 140735229395104 0 0 0 0 0 0 0 0 0 17 6 0 0 0 0 0 94060049300560 94060049302112 94060076990464 140735229397011 140735229397031 140735229397031 140735229403119 0
-    let selfStat = readFile("/proc/self/stat").split(") ")[^1].split(' ')
-    result[@[]] = @[
-      Metric(
-        name: "process_virtual_memory_bytes", # Virtual memory size in bytes.
-        value: selfStat[20].parseFloat(),
-        timestamp: timestamp,
-      ),
-      Metric(
-        name: "process_resident_memory_bytes", # Resident memory size in bytes.
-        value: selfStat[21].parseFloat() * pagesize,
-        timestamp: timestamp,
-      ),
-      Metric(
-        name: "process_start_time_seconds", # Start time of the process since unix epoch in seconds.
-        value: selfStat[19].parseFloat() / ticks + btime,
-        timestamp: timestamp,
-      ),
-      Metric(
-        name: "process_cpu_seconds_total", # Total user and system CPU time spent in seconds.
-        value: (selfStat[11].parseFloat() + selfStat[12].parseFloat()) / ticks,
-        timestamp: timestamp,
-      ),
-    ]
+    try:
+      if btime == 0:
+        # we couldn't access /proc
+        return
 
-    for line in lines("/proc/self/limits"):
-      if line.startsWith("Max open files"):
-        result[@[]].add(
-          Metric(
-            name: "process_max_fds", # Maximum number of open file descriptors.
-            value: line.split(whitespaceRegex)[3].parseFloat(), # a simple `split()` does not combine adjacent whitespace
-            timestamp: timestamp,
+      # the content of /proc/self/stat looks like this (the command name may contain spaces):
+      #
+      # $ cat /proc/self/stat
+      # 30494 (cat) R 3022 30494 3022 34830 30494 4210688 98 0 0 0 0 0 0 0 20 0 1 0 73800491 10379264 189 18446744073709551615 94060049248256 94060049282149 140735229395104 0 0 0 0 0 0 0 0 0 17 6 0 0 0 0 0 94060049300560 94060049302112 94060076990464 140735229397011 140735229397031 140735229397031 140735229403119 0
+      let selfStat = readFile("/proc/self/stat").split(") ")[^1].split(' ')
+      result[@[]] = @[
+        Metric(
+          name: "process_virtual_memory_bytes", # Virtual memory size in bytes.
+          value: selfStat[20].parseFloat(),
+          timestamp: timestamp,
+        ),
+        Metric(
+          name: "process_resident_memory_bytes", # Resident memory size in bytes.
+          value: selfStat[21].parseFloat() * pagesize,
+          timestamp: timestamp,
+        ),
+        Metric(
+          name: "process_start_time_seconds", # Start time of the process since unix epoch in seconds.
+          value: selfStat[19].parseFloat() / ticks + btime,
+          timestamp: timestamp,
+        ),
+        Metric(
+          name: "process_cpu_seconds_total", # Total user and system CPU time spent in seconds.
+          value: (selfStat[11].parseFloat() + selfStat[12].parseFloat()) / ticks,
+          timestamp: timestamp,
+        ),
+      ]
+
+      for line in lines("/proc/self/limits"):
+        if line.startsWith("Max open files"):
+          result[@[]].add(
+            Metric(
+              name: "process_max_fds", # Maximum number of open file descriptors.
+              value: line.split(whitespaceRegex)[3].parseFloat(), # a simple `split()` does not combine adjacent whitespace
+              timestamp: timestamp,
+            )
           )
-        )
-        break
+          break
 
-    result[@[]].add(
-      Metric(
-        name: "process_open_fds", # Number of open file descriptors.
-        value: toSeq(walkDir("/proc/self/fd")).len.float64,
-        timestamp: timestamp,
+      result[@[]].add(
+        Metric(
+          name: "process_open_fds", # Number of open file descriptors.
+          value: toSeq(walkDir("/proc/self/fd")).len.float64,
+          timestamp: timestamp,
+        )
       )
-    )
+    except CatchableError:
+      discard
 
 ####################
 # Nim runtime info #
@@ -820,7 +877,7 @@ when defined(metrics) and defined(linux):
 when defined(metrics):
   type RuntimeInfo = ref object of Gauge
 
-  proc newRuntimeInfo*(name: string, help: string, registry = defaultRegistry): RuntimeInfo =
+  proc newRuntimeInfo*(name: string, help: string, registry = defaultRegistry): RuntimeInfo {.raises: [Defect, ValueError, RegistrationError].} =
     validateName(name)
     result = RuntimeInfo(name: name,
                         help: help,
@@ -834,47 +891,59 @@ when defined(metrics):
   method collect*(collector: RuntimeInfo): Metrics =
     result = initOrderedTable[Labels, seq[Metric]]()
     var timestamp = getTime().toMilliseconds()
+    try:
+      result[@[]] = @[
+        Metric(
+          name: "nim_gc_mem_bytes", # the number of bytes that are owned by the process
+          value: getTotalMem().float64,
+          timestamp: timestamp,
+        ),
+        Metric(
+          name: "nim_gc_mem_occupied_bytes", # the number of bytes that are owned by the process and hold data
+          value: getOccupiedMem().float64,
+          timestamp: timestamp,
+        ),
+      ]
+      # TODO: parse the output of `GC_getStatistics()` for more stats
 
-    result[@[]] = @[
-      Metric(
-        name: "nim_gc_mem_bytes", # the number of bytes that are owned by the process
-        value: getTotalMem().float64,
-        timestamp: timestamp,
-      ),
-      Metric(
-        name: "nim_gc_mem_occupied_bytes", # the number of bytes that are owned by the process and hold data
-        value: getOccupiedMem().float64,
-        timestamp: timestamp,
-      ),
-    ]
-    # TODO: parse the output of `GC_getStatistics()` for more stats
-
-    when defined(nimTypeNames):
-      const topHeapObjects = 5
-      var heapSizes = initOrderedTable[cstring, int]()
-      for data in dumpHeapInstances():
-        heapSizes[data.name] = data.sizes
-      heapSizes.sort(proc (x, y: (cstring, int)): int = cmp(x[1], y[1]), SortOrder.Descending)
-      var i = 0
-      for typeName, size in heapSizes.pairs():
-        inc i
-        if i >= topHeapObjects:
-          break
+      when defined(nimTypeNames):
+        const topHeapObjects = 5
+        var heapSizes = initOrderedTable[cstring, int]()
+        for data in dumpHeapInstances():
+          heapSizes[data.name] = data.sizes
+        heapSizes.sort(proc (x, y: (cstring, int)): int = cmp(x[1], y[1]), SortOrder.Descending)
+        var i = 0
+        for typeName, size in heapSizes.pairs():
+          inc i
+          if i >= topHeapObjects:
+            break
+          result[@[]].add(
+            Metric(
+              name: "nim_gc_heap_instance_occupied_bytes", # total bytes occupied by instance type
+              value: size.float64,
+              timestamp: timestamp,
+              labels: @["type_name"],
+              labelValues: @[$typeName],
+            )
+          )
+    except CatchableError:
+      try:
         result[@[]].add(
           Metric(
-            name: "nim_gc_heap_instance_occupied_bytes", # total bytes occupied by instance type
-            value: size.float64,
+            name: "metric_error",
+            value: 1,
             timestamp: timestamp,
-            labels: @["type_name"],
-            labelValues: @[$typeName],
           )
         )
+      except KeyError as e:
+        doAssert false, e.msg
 
 ################################
 # HTTP server (for Prometheus) #
 ################################
 
 when defined(metrics):
+  {.pop.} # raises - no matter what, can't annotate async methods
   import asynchttpserver, asyncdispatch
 
   type HttpServerArgs = tuple[address: string, port: Port]
@@ -887,19 +956,33 @@ when defined(metrics):
     var server = newAsyncHttpServer()
 
     proc cb(req: Request) {.async.} =
-      if req.url.path == "/metrics":
-        {.gcsafe.}:
-          # Prometheus will drop our metrics in surprising ways if we give it
-          # timestamps, so we don't.
-          await req.respond(Http200,
-                            defaultRegistry.toText(showTimestamp = false),
-                            newHttpHeaders([("Content-Type", CONTENT_TYPE)]))
-      else:
-        await req.respond(Http404, "Try /metrics")
+      try:
+        if req.url.path == "/metrics":
+          {.gcsafe.}:
+              # Prometheus will drop our metrics in surprising ways if we give it
+              # timestamps, so we don't.
+              await req.respond(Http200,
+                                defaultRegistry.toText(showTimestamp = false),
+                                newHttpHeaders([("Content-Type", CONTENT_TYPE)]))
+        else:
+          await req.respond(Http404, "Try /metrics")
+      except Exception as e:
+        try:
+          write stderr, "metrics: ", e.msg
+        except IOError:
+          discard
 
-    waitFor server.serve(port, cb, address)
+    try:
+      waitFor server.serve(port, cb, address)
+    except Exception as e:
+      try:
+        write stderr, "metrics: ", e.msg
+      except IOError:
+        discard
 
-proc startHttpServer*(address = "127.0.0.1", port = Port(8000)) =
+  {.push raises: [Defect].}
+
+proc startHttpServer*(address = "127.0.0.1", port = Port(8000)) {.raises: [Exception].} =
   when defined(metrics):
     httpServerThread.createThread(httpServer, (address, port))
 
@@ -956,7 +1039,7 @@ when defined(metrics):
                           port: port
                         ))
 
-  proc pushMetrics*(name: string, value: float64, increment = 0.float64, metricType: string, timestamp: int64, sampleRate = 1.float) =
+  proc pushMetrics*(name: string, value: float64, increment = 0.float64, metricType: string, timestamp: int64, sampleRate = 1.float) {.raises: [Defect].} =
     # this may run from different threads
 
     if len(exportBackends) == 0:
@@ -965,17 +1048,23 @@ when defined(metrics):
 
     # Send a new metric to the thread handling the networking.
     # Silently drop it if the channel's buffer is full.
-    discard exportChan.trySend(ExportedMetric(
-                                name: name,
-                                value: value,
-                                increment: increment,
-                                metricType: metricType,
-                                timestamp: timestamp,
-                                sampleRate: sampleRate
-                              ))
+    try:
+      discard exportChan.trySend(ExportedMetric(
+                                  name: name,
+                                  value: value,
+                                  increment: increment,
+                                  metricType: metricType,
+                                  timestamp: timestamp,
+                                  sampleRate: sampleRate
+                                ))
+    except Exception as e:
+      try:
+        write stderr, e.msg
+      except IOError:
+        discard
 
   # connect or reconnect the socket at position i in `sockets`
-  proc reconnectSocket(i: int, backend: ExportBackend) =
+  proc reconnectSocket(i: int, backend: ExportBackend) {.raises: [Defect, OSError].} =
     # Throttle it.
     # We don't expect enough backends to worry about the thundering herd problem.
     if getTime() - lastConnectionTime[i] < RECONNECT_INTERVAL:
@@ -1023,50 +1112,54 @@ when defined(metrics):
 
     # No custom cleanup needed here, so let this thread be killed, the sockets
     # closed, etc., by the OS.
-    while true:
-      data = exportChan.recv() # blocking read
-      withLock(exportBackendsLock):
-        {.gcsafe.}:
-          # Account for backends added after this thread is launched. We don't
-          # support backend deletion.
-          if len(sockets) < len(exportBackends):
-            sockets.setLen(len(exportBackends))
-          if len(lastConnectionTime) < len(exportBackends):
-            lastConnectionTime.setLen(len(exportBackends))
+    try:
+      while true:
+        data = exportChan.recv() # blocking read
+        withLock(exportBackendsLock):
+          {.gcsafe.}:
+            # Account for backends added after this thread is launched. We don't
+            # support backend deletion.
+            if len(sockets) < len(exportBackends):
+              sockets.setLen(len(exportBackends))
+            if len(lastConnectionTime) < len(exportBackends):
+              lastConnectionTime.setLen(len(exportBackends))
 
-          # send the metrics
-          for i, backend in exportBackends:
-            case backend.metricProtocol:
-              of STATSD:
-                finalValue = data.value
-                sampleString = ""
+            # send the metrics
+            for i, backend in exportBackends:
+              case backend.metricProtocol:
+                of STATSD:
+                  finalValue = data.value
+                  sampleString = ""
 
-                if data.metricType == "c":
-                  # StatsD wants only the counter's increment, while Carbon wants the cumulated value
-                  finalValue = data.increment
+                  if data.metricType == "c":
+                    # StatsD wants only the counter's increment, while Carbon wants the cumulated value
+                    finalValue = data.increment
 
-                  # If the sample rate was set, throw the dice here.
-                  if data.sampleRate > 0 and data.sampleRate < 1.float:
-                    if rand(max = 1.float) > data.sampleRate:
-                      # skip it
-                      continue
-                    sampleString = "|@" & $data.sampleRate
-                payload = "$#:$#|$#$#\n" % [data.name, $finalValue, data.metricType, sampleString]
-              of CARBON:
-                # Carbon wants a 32-bit timestamp in seconds.
-                payload = "$# $# $#\n" % [data.name, $data.value, $(data.timestamp div 1000).int32]
+                    # If the sample rate was set, throw the dice here.
+                    if data.sampleRate > 0 and data.sampleRate < 1.float:
+                      if rand(max = 1.float) > data.sampleRate:
+                        # skip it
+                        continue
+                      sampleString = "|@" & $data.sampleRate
+                  payload = "$#:$#|$#$#\n" % [data.name, $finalValue, data.metricType, sampleString]
+                of CARBON:
+                  # Carbon wants a 32-bit timestamp in seconds.
+                  payload = "$# $# $#\n" % [data.name, $data.value, $(data.timestamp div 1000).int32]
 
-            if sockets[i] == nil:
-              reconnectSocket(i, backend)
               if sockets[i] == nil:
-                # we're in the waiting period
-                continue
+                reconnectSocket(i, backend)
+                if sockets[i] == nil:
+                  # we're in the waiting period
+                  continue
 
-            try:
-              sockets[i].send(payload, flags = {}) # the default flags would not raise an exception on a broken connection
-            except:
-              reconnectSocket(i, backend)
-              # No need to try and resend the data. We can afford to lose it.
+              try:
+                sockets[i].send(payload, flags = {}) # the default flags would not raise an exception on a broken connection
+              except OSError:
+                reconnectSocket(i, backend)
+    except Exception as e: # std lib raises lots of these
+      try:
+        write stderr, "metrics: " & e.msg
+      except IOError:
+        discard
 
   exportThread.createThread(pushMetricsWorker)
-
