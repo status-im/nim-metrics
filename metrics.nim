@@ -1,23 +1,18 @@
-# Copyright (c) 2019 Status Research & Development GmbH
+# Copyright (c) 2019-2020 Status Research & Development GmbH
 # Licensed and distributed under either of
 #   * MIT license: [LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT
 #   * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# Exceptions coming out of this library are mostly handled but due to bugs
-# in nim exception tracking and deficiencies in the standard library, not quite
-# all exceptions can be tracked - use at your own risk.
+# Exceptions coming out of this library are mostly handled but, due to bugs
+# in Nim exception tracking and deficiencies in the standard library, not quite
+# all exceptions can be tracked.
 #
 # When we do manage to catch an unexpected exception, we'll do one of several
 # things:
-# * Show the error to the user (for example on the polling web page or through
-#   an error metric) - this strategy is used mostly when rendering metrics
-#   or sending them to collection servers
+# * Try to print the message to stderr
 # * Raise a tracked exception - we use this strategy during collector
 #   registration
-# * Try to print the message to stderr - this is used if a registered collector
-#   fails to update the metrics for any reason
-# * Crash - the exception handling is a work in progress
 
 {.push raises: [Defect].} # Disabled further down for some parts of the code
 
@@ -74,6 +69,12 @@ const CONTENT_TYPE* = "text/plain; version=0.0.4; charset=utf-8"
 #########
 
 when defined(metrics):
+  proc printError(msg: string) =
+    try:
+      writeLine(stderr, "metrics error: " & msg)
+    except IOError:
+      discard
+
   proc toMilliseconds*(time: times.Time): int64 =
     return convert(Seconds, Milliseconds, time.toUnix()) + convert(Nanoseconds, Milliseconds, time.nanosecond())
 
@@ -104,8 +105,8 @@ when defined(metrics):
       for i in 0..metric.labels.high:
         try:
           textLabels.add("$#=\"$#\"" % [metric.labels[i], metric.labelValues[i].processLabelValue()])
-        except ValueError:
-          textLabels.add(metric.labels[i] & "=\"ValueError\"")
+        except ValueError as e:
+          printError(e.msg)
       result.add(textLabels.join(","))
       result.add('}')
     result.add(" " & $metric.value)
@@ -186,7 +187,8 @@ when defined(metrics):
         for metric in metrics:
           result.add(metric.toText(showTimestamp))
     except ValueError as e:
-      result = @["metrics: " & e.msg] # whatever
+      printError(e.msg)
+      result = @[""]
 
   proc toText*(collector: Collector, showTimestamp = true): string =
     collector.toTextLines(collector.metrics, showTimestamp).join("\n")
@@ -365,10 +367,7 @@ proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels
                   timestamp = timestamp,
                   sampleRate = counter.sampleRate)
     except Exception as e:
-      try:
-        write stderr, "metrics: " & e.msg
-      except IOError:
-        discard
+      printError(e.msg)
 
 template inc*(counter: Counter | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics) and counter is not IgnoredCollector:
@@ -481,10 +480,7 @@ proc incGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam 
                   metricType = "g",
                   timestamp = timestamp)
     except Exception as e:
-      try:
-        write stderr, "metrics: " & e.msg
-      except IOError:
-        discard
+      printError(e.msg)
 
 proc decGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
@@ -505,10 +501,7 @@ proc setGauge(gauge: Gauge, value: int64|float64, labelValues: LabelsParam = @[]
                   metricType = "g",
                   timestamp = timestamp)
     except Exception as e:
-      try:
-        write stderr, "metrics: " & e.msg
-      except IOError:
-        discard
+      printError(e.msg)
 
 # the "type IgnoredCollector" case is covered by Counter.inc()
 template inc*(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
@@ -638,10 +631,7 @@ proc observeSummary(summary: Summary, amount: int64|float64, labelValues: Labels
       atomicAdd(summary.metrics[labelValuesCopy][1].value.addr, 1.float64) # _count
       atomicStore(cast[ptr int64](summary.metrics[labelValuesCopy][1].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
     except Exception as e:
-      try:
-        write stderr, "metrics: " & e.msg
-      except IOError:
-        discard
+      printError(e.msg)
 
 template observe*(summary: Summary | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics) and summary is not IgnoredCollector:
@@ -766,10 +756,7 @@ proc observeHistogram(histogram: Histogram, amount: int64|float64, labelValues: 
           atomicAdd(histogram.metrics[labelValuesCopy][i + 3].value.addr, 1.float64) # _bucket{le="<bucket value>"}
           atomicStore(cast[ptr int64](histogram.metrics[labelValuesCopy][i + 3].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
     except Exception as e:
-      try:
-        write stderr, "metrics: " & e.msg
-      except IOError:
-        discard
+      printError(e.msg)
 
 # the "type IgnoredCollector" case is covered by Summary.observe()
 template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
@@ -867,8 +854,8 @@ when defined(metrics) and defined(linux):
           timestamp: timestamp,
         )
       )
-    except CatchableError:
-      discard
+    except CatchableError as e:
+      printError(e.msg)
 
 ####################
 # Nim runtime info #
@@ -890,6 +877,7 @@ when defined(metrics):
 
   method collect*(collector: RuntimeInfo): Metrics =
     result = initOrderedTable[Labels, seq[Metric]]()
+    result[@[]] = @[]
     var timestamp = getTime().toMilliseconds()
     try:
       result[@[]] = @[
@@ -926,17 +914,8 @@ when defined(metrics):
               labelValues: @[$typeName],
             )
           )
-    except CatchableError:
-      try:
-        result[@[]].add(
-          Metric(
-            name: "metric_error",
-            value: 1,
-            timestamp: timestamp,
-          )
-        )
-      except KeyError as e:
-        doAssert false, e.msg
+    except CatchableError as e:
+      printError(e.msg)
 
 ################################
 # HTTP server (for Prometheus) #
@@ -967,18 +946,12 @@ when defined(metrics):
         else:
           await req.respond(Http404, "Try /metrics")
       except Exception as e:
-        try:
-          write stderr, "metrics: ", e.msg
-        except IOError:
-          discard
+        printError(e.msg)
 
     try:
       waitFor server.serve(port, cb, address)
     except Exception as e:
-      try:
-        write stderr, "metrics: ", e.msg
-      except IOError:
-        discard
+      printError(e.msg)
 
   {.push raises: [Defect].}
 
@@ -1058,10 +1031,7 @@ when defined(metrics):
                                   sampleRate: sampleRate
                                 ))
     except Exception as e:
-      try:
-        write stderr, e.msg
-      except IOError:
-        discard
+      printError(e.msg)
 
   # connect or reconnect the socket at position i in `sockets`
   proc reconnectSocket(i: int, backend: ExportBackend) {.raises: [Defect, OSError].} =
@@ -1157,9 +1127,7 @@ when defined(metrics):
               except OSError:
                 reconnectSocket(i, backend)
     except Exception as e: # std lib raises lots of these
-      try:
-        write stderr, "metrics: " & e.msg
-      except IOError:
-        discard
+      printError(e.msg)
 
   exportThread.createThread(pushMetricsWorker)
+
