@@ -48,8 +48,8 @@ suite "counter":
     check myCounter.value == 8
     myCounter.inc(0.5)
     check myCounter.value == 8.5
-    expect ValueError:
-      myCounter.inc(-1)
+    myCounter.inc(-1) # you shouldn't be doing this - but we don't want metrics to crash the app
+    check myCounter.value == 8.5
     # name validation (have to use the internal API to get past Nim's identifier validation)
     when defined(metrics):
       expect ValueError:
