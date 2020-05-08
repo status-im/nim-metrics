@@ -123,7 +123,7 @@ when defined(metrics):
     labelRegexStr {.global.} = r"^[a-zA-Z_][a-zA-Z0-9_]*$"
     labelRegex {.global.} = re(labelRegexStr)
 
-  proc validateName(name: string) {.raises: [Defect, ValueError].} =
+  proc validateName*(name: string) {.raises: [Defect, ValueError].} =
     if not name.contains(nameRegex):
       raise newException(ValueError, "Invalid name: '" & name & "'. It should match the regex: " & nameRegexStr)
 
