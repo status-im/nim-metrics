@@ -143,8 +143,23 @@ when defined(metrics):
       var signalMask, oldSignalMask: Sigset
 
       # sigprocmask() doesn't work on macOS, for multithreaded programs
-      if sigfillset(signalMask) != 0 or
-        pthread_sigmask(SIG_BLOCK, signalMask, oldSignalMask) != 0:
+      if sigfillset(signalMask) != 0:
+        echo osErrorMsg(osLastError())
+        quit(QuitFailure)
+      when defined(boehmgc):
+        # https://www.hboehm.info/gc/debugging.html
+        const
+          SIGPWR = 30
+          SIGXCPU = 24
+          SIGSEGV = 11
+          SIGBUS = 7
+        if sigdelset(signalMask, SIGPWR) != 0 or
+          sigdelset(signalMask, SIGXCPU) != 0 or
+          sigdelset(signalMask, SIGSEGV) != 0 or
+          sigdelset(signalMask, SIGBUS) != 0:
+          echo osErrorMsg(osLastError())
+          quit(QuitFailure)
+      if pthread_sigmask(SIG_BLOCK, signalMask, oldSignalMask) != 0:
         echo osErrorMsg(osLastError())
         quit(QuitFailure)
 
@@ -799,7 +814,7 @@ when defined(metrics) and defined(linux):
     pagesize = sysconf(SC_PAGE_SIZE).float64
 
   method collect*(collector: ProcessInfo): Metrics =
-    var timestamp = getTime().toMilliseconds()
+    let timestamp = getTime().toMilliseconds()
     result = initOrderedTable[Labels, seq[Metric]]()
     result[@[]] = @[]
 
@@ -878,23 +893,27 @@ when defined(metrics):
   method collect*(collector: RuntimeInfo): Metrics =
     result = initOrderedTable[Labels, seq[Metric]]()
     result[@[]] = @[]
-    var timestamp = getTime().toMilliseconds()
+    let timestamp = getTime().toMilliseconds()
     try:
-      result[@[]] = @[
-        Metric(
-          name: "nim_gc_mem_bytes", # the number of bytes that are owned by the process
-          value: getTotalMem().float64,
-          timestamp: timestamp,
-        ),
-        Metric(
-          name: "nim_gc_mem_occupied_bytes", # the number of bytes that are owned by the process and hold data
-          value: getOccupiedMem().float64,
-          timestamp: timestamp,
-        ),
-      ]
+      when declared(getTotalMem):
+        result[@[]].add(
+          Metric(
+            name: "nim_gc_mem_bytes", # the number of bytes that are owned by the process
+            value: getTotalMem().float64,
+            timestamp: timestamp,
+          )
+        )
+      when declared(getOccupiedMem):
+        result[@[]].add(
+          Metric(
+            name: "nim_gc_mem_occupied_bytes", # the number of bytes that are owned by the process and hold data
+            value: getOccupiedMem().float64,
+            timestamp: timestamp,
+          )
+        )
       # TODO: parse the output of `GC_getStatistics()` for more stats
 
-      when defined(nimTypeNames):
+      when defined(nimTypeNames) and declared(dumpHeapInstances):
         const topHeapObjects = 5
         var heapSizes = initOrderedTable[cstring, int]()
         for data in dumpHeapInstances():
