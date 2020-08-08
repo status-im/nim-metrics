@@ -964,13 +964,14 @@ when defined(metrics):
                                 newHttpHeaders([("Content-Type", CONTENT_TYPE)]))
         else:
           await req.respond(Http404, "Try /metrics")
-      except Exception as e:
+      except CatchableError as e:
         printError(e.msg)
 
-    try:
-      waitFor server.serve(port, cb, address)
-    except Exception as e:
-      printError(e.msg)
+    while true:
+      try:
+        waitFor server.serve(port, cb, address)
+      except CatchableError as e:
+        printError(e.msg)
 
   {.push raises: [Defect].}
 
