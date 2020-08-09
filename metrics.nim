@@ -951,7 +951,7 @@ when defined(metrics):
     ignoreSignalsInThread()
 
     let (address, port) = args
-    var server = newAsyncHttpServer()
+    var server = newAsyncHttpServer(reuseAddr = true, reusePort = true)
 
     proc cb(req: Request) {.async.} =
       try:
@@ -972,6 +972,7 @@ when defined(metrics):
         waitFor server.serve(port, cb, address)
       except CatchableError as e:
         printError(e.msg)
+        sleep(1000)
 
   {.push raises: [Defect].}
 
