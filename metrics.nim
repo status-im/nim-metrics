@@ -392,9 +392,9 @@ template countExceptions*(counter: Counter | type IgnoredCollector, typ: typedes
   when defined(metrics) and counter is not IgnoredCollector:
     try:
       body
-    except typ:
+    except typ as exc:
       counter.inc(1, labelValues)
-      raise
+      raise exc
   else:
     body
 
