@@ -27,7 +27,7 @@ declarePublicCounter globalPublicCounter, "help"
 declareGauge globalGauge, "help"
 declarePublicGauge globalPublicGauge, "help"
 
-proc gcSafetyTest* {.gcsafe.} = # The test is succesful if this proc compiles
+proc gcSafetyTest* {.gcsafe.} = # The test is successful if this proc compiles
   globalCounter.inc 2
   globalPublicCounter.inc(2)
   globalGauge.set 10.0
