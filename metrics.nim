@@ -20,7 +20,7 @@ when defined(arm):
   # ARMv6 workaround - TODO upstream to Nim atomics
   {.passl:"-latomic".}
 
-import locks, net, os, re, sets, tables, times
+import locks, net, os, sets, tables, times
 when defined(metrics):
   import algorithm, hashes, random, sequtils, strutils
   when defined(posix):
@@ -119,17 +119,43 @@ when defined(metrics):
   let
     # these have to be {.global.} for the validation to work with the alternative API
     nameRegexStr {.global.} = r"^[a-zA-Z_:][a-zA-Z0-9_:]*$"
-    nameRegex {.global.} = re(nameRegexStr)
     labelRegexStr {.global.} = r"^[a-zA-Z_][a-zA-Z0-9_]*$"
-    labelRegex {.global.} = re(labelRegexStr)
 
-  proc validateName*(name: string) {.raises: [Defect, ValueError].} =
-    if not name.contains(nameRegex):
+  when not defined(withoutPCRE):
+    import re
+
+    let
+      nameRegex {.global.} = re(nameRegexStr)
+      labelRegex {.global.} = re(labelRegexStr)
+
+    template validName(name): bool =
+      name.contains(nameRegex)
+
+    template validLabel(label): bool =
+      label.contains(labelRegex)
+  else:
+    const
+      labelStartChars = {'a'..'z', 'A'..'Z', '_'}
+      labelChars = labelStartChars + {'0'..'9'}
+      nameStartChars = labelStartChars + {':'}
+      nameChars = labelChars + {':'}
+
+    template validate(ident, startChars, chars): bool =
+      ident.len > 0 and ident[0] in startChars and @ident.allIt(it in chars)
+
+    template validName(name): bool =
+      validate(name, nameStartChars, nameChars)
+
+    template validLabel(label): bool =
+      validate(label, labelStartChars, labelChars)
+
+  proc validateName(name: string) {.raises: [Defect, ValueError].} =
+    if not validName(name):
       raise newException(ValueError, "Invalid name: '" & name & "'. It should match the regex: " & nameRegexStr)
 
   proc validateLabels(labels: LabelsParam, invalidLabelNames: openArray[string] = []) {.raises: [Defect, ValueError].} =
     for label in labels:
-      if not label.contains(labelRegex):
+      if not validLabel(label):
         raise newException(ValueError, "Invalid label: '" & label & "'. It should match the regex: '" & labelRegexStr & "'.")
       if label.startsWith("__"):
         raise newException(ValueError, "Invalid label: '" & label & "'. It should not start with '__'.")
@@ -800,7 +826,6 @@ when defined(metrics) and defined(linux):
     btime {.global.}: float64 = 0
     ticks {.global.}: float64 # clock ticks per second
     pagesize {.global.}: float64 # page size in bytes
-    whitespaceRegex {.global.} = re(r"\s+")
 
   if btime == 0:
     try:
@@ -856,7 +881,7 @@ when defined(metrics) and defined(linux):
           result[@[]].add(
             Metric(
               name: "process_max_fds", # Maximum number of open file descriptors.
-              value: line.split(whitespaceRegex)[3].parseFloat(), # a simple `split()` does not combine adjacent whitespace
+              value: line.splitWhiteSpace()[3].parseFloat(), # a simple `split()` does not combine adjacent whitespace
               timestamp: timestamp,
             )
           )
