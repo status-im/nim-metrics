@@ -27,6 +27,8 @@ nimble install https://github.com/status-im/nim-metrics@#master
 
 To enable metrics, compile your code with `-d:metrics --threads:on`.
 
+To avoid depending on PCRE, compile with `-d:withoutPCRE`.
+
 ## Architectural overview
 
 `Collector` objects holding various `Metric` objects are registered in one or
