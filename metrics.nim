@@ -939,16 +939,16 @@ when defined(metrics):
       # TODO: parse the output of `GC_getStatistics()` for more stats
 
       when defined(nimTypeNames) and declared(dumpHeapInstances):
-        const topHeapObjects = 5
-        var heapSizes = initOrderedTable[cstring, int]()
+        var heapSizes: array[10, (cstring, int)]
         for data in dumpHeapInstances():
-          heapSizes[data.name] = data.sizes
-        heapSizes.sort(proc (x, y: (cstring, int)): int = cmp(x[1], y[1]), SortOrder.Descending)
-        var i = 0
-        for typeName, size in heapSizes.pairs():
-          inc i
-          if i >= topHeapObjects:
-            break
+          var smallest = 0
+          for i in 1..<heapSizes.len:
+            if heapSizes[smallest][1] >= heapSizes[i][1]:
+              smallest = i
+          if data.sizes > heapSizes[smallest][1]:
+            heapSizes[smallest] = (data.name, data.sizes)
+        sort(heapSizes, proc(a, b: auto): auto = b[1] - a[1])
+        for (typeName, size) in heapSizes:
           result[@[]].add(
             Metric(
               name: "nim_gc_heap_instance_occupied_bytes", # total bytes occupied by instance type
