@@ -149,7 +149,7 @@ when defined(metrics):
     template validLabel(label): bool =
       validate(label, labelStartChars, labelChars)
 
-  proc validateName(name: string) {.raises: [Defect, ValueError].} =
+  proc validateName*(name: string) {.raises: [Defect, ValueError].} =
     if not validName(name):
       raise newException(ValueError, "Invalid name: '" & name & "'. It should match the regex: " & nameRegexStr)
 
