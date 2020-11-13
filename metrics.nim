@@ -116,10 +116,9 @@ when defined(metrics):
   proc `$`*(metric: Metric): string =
     metric.toText()
 
-  let
-    # these have to be {.global.} for the validation to work with the alternative API
-    nameRegexStr {.global.} = r"^[a-zA-Z_:][a-zA-Z0-9_:]*$"
-    labelRegexStr {.global.} = r"^[a-zA-Z_][a-zA-Z0-9_]*$"
+  const
+    nameRegexStr = r"^[a-zA-Z_:][a-zA-Z0-9_:]*$"
+    labelRegexStr = r"^[a-zA-Z_][a-zA-Z0-9_]*$"
 
   when not defined(withoutPCRE):
     import re
