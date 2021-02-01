@@ -938,16 +938,29 @@ when defined(metrics):
       # TODO: parse the output of `GC_getStatistics()` for more stats
 
       when defined(nimTypeNames) and declared(dumpHeapInstances):
-        var heapSizes: array[10, (cstring, int)]
+        # Too high cardinality causes performance issues in Prometheus.
+        const labelsLimit = 10
+        # Higher size then in the loop for adding metrics
+        # to avoid missing same name metrics far apart with low values.
+        var heapSizes: array[100, (cstring, int)]
+        var counter: int
         for data in dumpHeapInstances():
+          counter += 1
           var smallest = 0
-          for i in 1..<heapSizes.len:
+          var dedupe = false
+          for i in 0..<heapSizes.len:
+            if heapSizes[i][0] == data.name:
+              heapSizes[i][1] += data.sizes
+              dedupe = true
+              break
             if heapSizes[smallest][1] >= heapSizes[i][1]:
               smallest = i
-          if data.sizes > heapSizes[smallest][1]:
+          if not dedupe and data.sizes > heapSizes[smallest][1]:
             heapSizes[smallest] = (data.name, data.sizes)
         sort(heapSizes, proc(a, b: auto): auto = b[1] - a[1])
-        for (typeName, size) in heapSizes:
+        # Lower the number of metrics to reduce metric cardinality.
+        for i in 0..<labelsLimit:
+          let (typeName, size) = heapSizes[i]
           result[@[]].add(
             Metric(
               name: "nim_gc_heap_instance_occupied_bytes", # total bytes occupied by instance type
