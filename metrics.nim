@@ -979,43 +979,49 @@ when defined(metrics):
 
 when defined(metrics):
   {.pop.} # raises - no matter what, can't annotate async methods
-  import asynchttpserver, asyncdispatch
+  import chronos, chronos/apps
 
-  type HttpServerArgs = tuple[address: string, port: Port]
-  var httpServerThread: Thread[HttpServerArgs]
+  var httpServerThread: Thread[TransportAddress]
 
-  proc httpServer(args: HttpServerArgs) {.thread.} =
+  proc httpServer(address: TransportAddress) {.thread.} =
     ignoreSignalsInThread()
 
-    let (address, port) = args
-    var server = newAsyncHttpServer(reuseAddr = true, reusePort = true)
+    proc cb(r: RequestFence): Future[HttpResponseRef] {.async.} =
+      if r.isOk():
+        let request = r.get()
+        try:
+          if request.uri.path == "/metrics":
+            {.gcsafe.}:
+              # Prometheus will drop our metrics in surprising ways if we give
+              # it timestamps, so we don't.
+              let response = defaultRegistry.toText(showTimestamp = false)
+              let headers = HttpTable.init([("Content-Type", CONTENT_TYPE)])
+              return await request.respond(Http200, response, headers)
+          else:
+            return await request.respond(Http404, "Try /metrics")
+        except CatchableError as exc:
+          printError(exc.msg)
 
-    proc cb(req: Request) {.async.} =
-      try:
-        if req.url.path == "/metrics":
-          {.gcsafe.}:
-              # Prometheus will drop our metrics in surprising ways if we give it
-              # timestamps, so we don't.
-              await req.respond(Http200,
-                                defaultRegistry.toText(showTimestamp = false),
-                                newHttpHeaders([("Content-Type", CONTENT_TYPE)]))
-        else:
-          await req.respond(Http404, "Try /metrics")
-      except CatchableError as e:
-        printError(e.msg)
-
+    let socketFlags = {ServerFlags.ReuseAddr}
+    let res = HttpServerRef.new(address, cb, socketFlags = socketFlags)
+    if res.isErr():
+      printError(res.error())
+      return
+    let server = res.get()
+    server.start()
     while true:
       try:
-        waitFor server.serve(port, cb, address)
+        waitFor server.join()
       except CatchableError as e:
         printError(e.msg)
         sleep(1000)
 
   {.push raises: [Defect].}
 
-proc startHttpServer*(address = "127.0.0.1", port = Port(8000)) {.raises: [Exception].} =
+proc startHttpServer*(address = "127.0.0.1", port = Port(8000)) {.
+     raises: [Exception].} =
   when defined(metrics):
-    httpServerThread.createThread(httpServer, (address, port))
+    httpServerThread.createThread(httpServer, initTAddress(address, port))
 
 #######################################
 # export metrics to StatsD and Carbon #

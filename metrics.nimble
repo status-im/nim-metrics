@@ -8,7 +8,8 @@ license       = "MIT or Apache License 2.0"
 skipDirs      = @["tests", "benchmarks"]
 
 ### Dependencies
-requires "nim >= 0.18.0"
+requires "nim >= 0.18.0",
+         "chronos >= 2.6.0"
 
 ### Helper functions
 proc buildBinary(name: string, srcDir = "./", params = "", lang = "c") =
