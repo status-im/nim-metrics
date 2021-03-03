@@ -979,11 +979,11 @@ when defined(metrics):
 
 when defined(metrics):
   {.pop.} # raises - no matter what, can't annotate async methods
-  import chronos, chronos/apps
+  import chronos, chronos/apps/http/httpserver
 
   var httpServerThread: Thread[TransportAddress]
 
-  proc httpServer(address: TransportAddress) {.thread.} =
+  proc serveHttp(address: TransportAddress) {.thread.} =
     ignoreSignalsInThread()
 
     proc cb(r: RequestFence): Future[HttpResponseRef] {.async.} =
@@ -1021,7 +1021,7 @@ when defined(metrics):
 proc startHttpServer*(address = "127.0.0.1", port = Port(8000)) {.
      raises: [Exception].} =
   when defined(metrics):
-    httpServerThread.createThread(httpServer, initTAddress(address, port))
+    httpServerThread.createThread(serveHttp, initTAddress(address, port))
 
 #######################################
 # export metrics to StatsD and Carbon #
