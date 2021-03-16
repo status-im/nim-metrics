@@ -16,10 +16,6 @@
 
 {.push raises: [Defect].} # Disabled further down for some parts of the code
 
-when defined(arm):
-  # ARMv6 workaround - TODO upstream to Nim atomics
-  {.passl:"-latomic".}
-
 import locks, net, os, sets, tables, times
 when defined(metrics):
   import algorithm, hashes, random, sequtils, strutils,
@@ -41,6 +37,7 @@ type
   Metrics* = OrderedTable[Labels, seq[Metric]]
 
   Collector* = ref object of RootObj
+    lock*: Lock
     name*: string
     help*: string
     typ*: string
@@ -72,19 +69,6 @@ const CONTENT_TYPE* = "text/plain; version=0.0.4; charset=utf-8"
 when defined(metrics):
   proc toMilliseconds*(time: times.Time): int64 =
     return convert(Seconds, Milliseconds, time.toUnix()) + convert(Nanoseconds, Milliseconds, time.nanosecond())
-
-  proc atomicAdd*(dest: ptr float64, amount: float64) =
-    var oldVal, newVal: float64
-
-    # we need two atomic operations for floats, so do the CAS in a loop until we're
-    # sure we're incrementing the latest value
-    while true:
-      atomicLoad(cast[ptr int64](dest), cast[ptr int64](oldVal.addr), ATOMIC_SEQ_CST)
-      newVal = oldVal + amount
-      # the "weak" version is safe in a loop and it's more efficient than the
-      # "strong" version that uses a loop of its own (specially on ARM)
-      if atomicCompareExchange(cast[ptr int64](dest), cast[ptr int64](oldVal.addr), cast[ptr int64](newVal.addr), weak = true, ATOMIC_SEQ_CST, ATOMIC_SEQ_CST):
-        break
 
   template processHelp*(help: string): string =
     help.multireplace([("\\", "\\\\"), ("\n", "\\n")])
@@ -234,8 +218,6 @@ proc newRegistry*(): Registry =
   when defined(metrics):
     new(result)
     result.lock.initLock()
-    # TODO: remove this set initialisation after porting to Nim-0.20.x
-    result.collectors.init()
 
 # needs to be {.global.} because of the alternative API's usage of {.global.} collector vars
 var defaultRegistry* {.global.} = newRegistry()
@@ -266,7 +248,8 @@ proc collect*(registry: Registry): OrderedTable[Collector, Metrics] =
     withLock registry.lock:
       for collector in registry.collectors:
         var collectorCopy: Collector
-        deepCopy(collectorCopy, collector)
+        withLock collector.lock:
+          deepCopy(collectorCopy, collector)
         result[collectorCopy] = collectorCopy.collect()
 
 proc toText*(registry: Registry, showTimestamp = true): string =
@@ -313,6 +296,7 @@ when defined(metrics):
                     metrics: initOrderedTable[Labels, seq[Metric]](),
                     creationThreadId: getThreadId(),
                     sampleRate: sampleRate)
+    result.lock.initLock()
     if labels.len == 0:
       result.metrics[@labels] = newCounterMetrics(name, labels, labels)
     result.register(registry)
@@ -363,17 +347,16 @@ proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels
       if amount < 0:
         raise newException(ValueError, "Counter.inc() cannot be used with negative amounts.")
 
-      let labelValuesCopy = validateCounterLabelValues(counter, labelValues)
-
-      atomicAdd(counter.metrics[labelValuesCopy][0].value.addr, amount.float64)
-      atomicStore(cast[ptr int64](counter.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
-
-      pushMetrics(name = counter.name,
-                  value = counter.metrics[labelValuesCopy][0].value,
-                  increment = amount.float64,
-                  metricType = "c",
-                  timestamp = timestamp,
-                  sampleRate = counter.sampleRate)
+      withLock counter.lock:
+        let labelValuesCopy = validateCounterLabelValues(counter, labelValues)
+        counter.metrics[labelValuesCopy][0].value += amount.float64
+        counter.metrics[labelValuesCopy][0].timestamp = timestamp
+        pushMetrics(name = counter.name,
+                    value = counter.metrics[labelValuesCopy][0].value,
+                    increment = amount.float64,
+                    metricType = "c",
+                    timestamp = timestamp,
+                    sampleRate = counter.sampleRate)
     except Exception as e:
       printError(e.msg)
 
@@ -440,6 +423,7 @@ when defined(metrics):
                   labels: @labels,
                   metrics: initOrderedTable[Labels, seq[Metric]](),
                   creationThreadId: getThreadId())
+    result.lock.initLock()
     if labels.len == 0:
       result.metrics[@labels] = newGaugeMetrics(name, labels, labels)
     result.register(registry)
@@ -478,15 +462,14 @@ proc incGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam 
     try:
       var timestamp = getTime().toMilliseconds()
 
-      let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
-
-      atomicAdd(gauge.metrics[labelValuesCopy][0].value.addr, amount.float64)
-      atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
-
-      pushMetrics(name = gauge.name,
-                  value = gauge.metrics[labelValuesCopy][0].value,
-                  metricType = "g",
-                  timestamp = timestamp)
+      withLock gauge.lock:
+        let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
+        gauge.metrics[labelValuesCopy][0].value += amount.float64
+        gauge.metrics[labelValuesCopy][0].timestamp = timestamp
+        pushMetrics(name = gauge.name,
+                    value = gauge.metrics[labelValuesCopy][0].value,
+                    metricType = "g",
+                    timestamp = timestamp)
     except Exception as e:
       printError(e.msg)
 
@@ -499,15 +482,14 @@ proc setGauge(gauge: Gauge, value: int64|float64, labelValues: LabelsParam = @[]
     try:
       var timestamp = getTime().toMilliseconds()
 
-      let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
-
-      atomicStoreN(cast[ptr int64](gauge.metrics[labelValuesCopy][0].value.addr), cast[int64](value.float64), ATOMIC_SEQ_CST)
-      atomicStore(cast[ptr int64](gauge.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
-
-      pushMetrics(name = gauge.name,
-                  value = value.float64,
-                  metricType = "g",
-                  timestamp = timestamp)
+      withLock gauge.lock:
+        let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
+        gauge.metrics[labelValuesCopy][0].value = value.float64
+        gauge.metrics[labelValuesCopy][0].timestamp = timestamp
+        pushMetrics(name = gauge.name,
+                    value = value.float64,
+                    metricType = "g",
+                    timestamp = timestamp)
     except Exception as e:
       printError(e.msg)
 
@@ -595,6 +577,7 @@ when defined(metrics):
                     labels: @labels,
                     metrics: initOrderedTable[Labels, seq[Metric]](),
                     creationThreadId: getThreadId())
+    result.lock.initLock()
     if labels.len == 0:
       result.metrics[@labels] = newSummaryMetrics(name, labels, labels)
     result.register(registry)
@@ -632,12 +615,12 @@ proc observeSummary(summary: Summary, amount: int64|float64, labelValues: Labels
     try:
       var timestamp = getTime().toMilliseconds()
 
-      let labelValuesCopy = validateSummaryLabelValues(summary, labelValues)
-
-      atomicAdd(summary.metrics[labelValuesCopy][0].value.addr, amount.float64) # _sum
-      atomicStore(cast[ptr int64](summary.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
-      atomicAdd(summary.metrics[labelValuesCopy][1].value.addr, 1.float64) # _count
-      atomicStore(cast[ptr int64](summary.metrics[labelValuesCopy][1].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+      withLock summary.lock:
+        let labelValuesCopy = validateSummaryLabelValues(summary, labelValues)
+        summary.metrics[labelValuesCopy][0].value += amount.float64 # _sum
+        summary.metrics[labelValuesCopy][0].timestamp = timestamp
+        summary.metrics[labelValuesCopy][1].value += 1.float64 # _count
+        summary.metrics[labelValuesCopy][1].timestamp = timestamp
     except Exception as e:
       printError(e.msg)
 
@@ -711,6 +694,7 @@ when defined(metrics):
                     metrics: initOrderedTable[Labels, seq[Metric]](),
                     creationThreadId: getThreadId(),
                     buckets: bucketsSeq)
+    result.lock.initLock()
     if labels.len == 0:
       result.metrics[@labels] = newHistogramMetrics(name, labels, labels, bucketsSeq)
     result.register(registry)
@@ -750,19 +734,19 @@ proc observeHistogram(histogram: Histogram, amount: int64|float64, labelValues: 
     try:
       var timestamp = getTime().toMilliseconds()
 
-      let labelValuesCopy = validateHistogramLabelValues(histogram, labelValues)
-
-      atomicAdd(histogram.metrics[labelValuesCopy][0].value.addr, amount.float64) # _sum
-      atomicStore(cast[ptr int64](histogram.metrics[labelValuesCopy][0].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
-      atomicAdd(histogram.metrics[labelValuesCopy][1].value.addr, 1.float64) # _count
-      atomicStore(cast[ptr int64](histogram.metrics[labelValuesCopy][1].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
-      for i, bucket in histogram.buckets:
-        if amount.float64 <= bucket:
-          #- "le" probably stands for "less or equal"
-          #- the same observed value can increase multiple buckets, because this is
-          #  a cumulative histogram
-          atomicAdd(histogram.metrics[labelValuesCopy][i + 3].value.addr, 1.float64) # _bucket{le="<bucket value>"}
-          atomicStore(cast[ptr int64](histogram.metrics[labelValuesCopy][i + 3].timestamp.addr), timestamp.addr, ATOMIC_SEQ_CST)
+      withLock histogram.lock:
+        let labelValuesCopy = validateHistogramLabelValues(histogram, labelValues)
+        histogram.metrics[labelValuesCopy][0].value += amount.float64 # _sum
+        histogram.metrics[labelValuesCopy][0].timestamp = timestamp
+        histogram.metrics[labelValuesCopy][1].value += 1.float64 # _count
+        histogram.metrics[labelValuesCopy][1].timestamp = timestamp
+        for i, bucket in histogram.buckets:
+          if amount.float64 <= bucket:
+            #- "le" probably stands for "less or equal"
+            #- the same observed value can increase multiple buckets, because this is
+            #  a cumulative histogram
+            histogram.metrics[labelValuesCopy][i + 3].value += 1.float64 # _bucket{le="<bucket value>"}
+            histogram.metrics[labelValuesCopy][i + 3].timestamp = timestamp
     except Exception as e:
       printError(e.msg)
 
@@ -786,6 +770,7 @@ when defined(metrics) and defined(linux):
                         help: help,
                         typ: "gauge", # Prometheus won't allow fantasy types in here
                         creationThreadId: getThreadId())
+    result.lock.initLock()
     result.register(registry)
 
   var
@@ -877,6 +862,7 @@ when defined(metrics):
                         help: help,
                         typ: "gauge",
                         creationThreadId: getThreadId())
+    result.lock.initLock()
     result.register(registry)
 
   var
