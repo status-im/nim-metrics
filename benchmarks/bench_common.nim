@@ -1,3 +1,9 @@
+# Copyright (c) 2019-2021 Status Research & Development GmbH
+# Licensed and distributed under either of
+#   * MIT license: http://opensource.org/licenses/MIT
+#   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
+# at your option. This file may not be copied, modified, or distributed except according to those terms.
+
 # taken from https://github.com/status-im/nim-beacon-chain/tree/master/benchmarks
 
 import times, stats, strformat
@@ -6,8 +12,8 @@ export times, stats, strformat
 proc warmup*() =
   # Warmup - make sure cpu is on max perf
   let start = cpuTime()
-  var foo = 123
-  for i in 0 ..< 300_000_000:
+  var foo = 123'i64
+  for i in 0'i64 ..< 300_000_000'i64:
     foo += i*i mod 456
     foo = foo mod 789
 

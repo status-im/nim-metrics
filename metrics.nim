@@ -1,7 +1,7 @@
-# Copyright (c) 2019-2020 Status Research & Development GmbH
+# Copyright (c) 2019-2021 Status Research & Development GmbH
 # Licensed and distributed under either of
-#   * MIT license: [LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT
-#   * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+#   * MIT license: http://opensource.org/licenses/MIT
+#   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Exceptions coming out of this library are mostly handled but, due to bugs
@@ -22,10 +22,11 @@ when defined(arm):
 
 import locks, net, os, sets, tables, times
 when defined(metrics):
-  import algorithm, hashes, random, sequtils, strutils
+  import algorithm, hashes, random, sequtils, strutils,
+    metrics/common
   when defined(posix):
     import posix
-import metrics/common
+
 type
   Labels* = seq[string]
   LabelsParam* = openArray[string]
