@@ -3,14 +3,14 @@
 ################################
 when defined(nimHasUsed): {.used.}
 
-import ../metrics
+import ../metrics, common
 import std/[os, asynchttpserver, asyncdispatch]
 
 type HttpServerArgs = tuple[address: string, port: Port]
 var httpServerThread: Thread[HttpServerArgs]
 
 proc httpServer(args: HttpServerArgs) {.thread.} =
-  metricsIgnoreSignalsInThread()
+  ignoreSignalsInThread()
 
   let (address, port) = args
   var server = newAsyncHttpServer(reuseAddr = true, reusePort = true)

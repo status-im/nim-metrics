@@ -3,14 +3,14 @@
 ################################
 when defined(nimHasUsed): {.used.}
 
-import ../metrics
+import ../metrics, common
 import std/os
 import chronos, chronos/apps/http/httpserver
 
 var httpServerThread: Thread[TransportAddress]
 
 proc serveHttp(address: TransportAddress) {.thread.} =
-  metrics.metricsIgnoreSignalsInThread()
+  ignoreSignalsInThread()
 
   proc cb(r: RequestFence): Future[HttpResponseRef] {.async.} =
     if r.isOk():

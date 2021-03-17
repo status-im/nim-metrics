@@ -8,7 +8,7 @@ license       = "MIT or Apache License 2.0"
 skipDirs      = @["tests", "benchmarks"]
 
 ### Dependencies
-requires "nim >= 1.2.6",
+requires "nim >= 1.2.0",
          "chronos >= 2.6.0"
 
 ### Helper functions

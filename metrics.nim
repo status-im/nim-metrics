@@ -25,7 +25,7 @@ when defined(metrics):
   import algorithm, hashes, random, sequtils, strutils
   when defined(posix):
     import posix
-
+import metrics/common
 type
   Labels* = seq[string]
   LabelsParam* = openArray[string]
@@ -69,12 +69,6 @@ const CONTENT_TYPE* = "text/plain; version=0.0.4; charset=utf-8"
 #########
 
 when defined(metrics):
-  proc printError*(msg: string) =
-    try:
-      writeLine(stderr, "metrics error: " & msg)
-    except IOError:
-      discard
-
   proc toMilliseconds*(time: times.Time): int64 =
     return convert(Seconds, Milliseconds, time.toUnix()) + convert(Nanoseconds, Milliseconds, time.nanosecond())
 
@@ -160,33 +154,6 @@ when defined(metrics):
         raise newException(ValueError, "Invalid label: '" & label & "'. It should not start with '__'.")
       if label in invalidLabelNames:
         raise newException(ValueError, "Invalid label: '" & label & "'. It should not be one of: " & $invalidLabelNames & ".")
-
-  proc metricsIgnoreSignalsInThread*() =
-    # Block all signals in this thread, so we don't interfere with regular signal
-    # handling elsewhere.
-    when defined(posix):
-      var signalMask, oldSignalMask: Sigset
-
-      # sigprocmask() doesn't work on macOS, for multithreaded programs
-      if sigfillset(signalMask) != 0:
-        echo osErrorMsg(osLastError())
-        quit(QuitFailure)
-      when defined(boehmgc):
-        # https://www.hboehm.info/gc/debugging.html
-        const
-          SIGPWR = 30
-          SIGXCPU = 24
-          SIGSEGV = 11
-          SIGBUS = 7
-        if sigdelset(signalMask, SIGPWR) != 0 or
-          sigdelset(signalMask, SIGXCPU) != 0 or
-          sigdelset(signalMask, SIGSEGV) != 0 or
-          sigdelset(signalMask, SIGBUS) != 0:
-          echo osErrorMsg(osLastError())
-          quit(QuitFailure)
-      if pthread_sigmask(SIG_BLOCK, signalMask, oldSignalMask) != 0:
-        echo osErrorMsg(osLastError())
-        quit(QuitFailure)
 
 ######################
 # generic collectors #
@@ -1083,7 +1050,7 @@ when defined(metrics):
       sockets[i] = nil
 
   proc pushMetricsWorker() {.thread.} =
-    metricsIgnoreSignalsInThread()
+    ignoreSignalsInThread()
 
     var
       data: ExportedMetric # received from the channel
