@@ -1,3 +1,6 @@
+when defined(posix):
+  import os, posix
+
 proc printError*(msg: string) =
   try:
     writeLine(stderr, "metrics error: " & msg)
