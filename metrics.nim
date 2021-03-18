@@ -1,7 +1,7 @@
-# Copyright (c) 2019-2020 Status Research & Development GmbH
+# Copyright (c) 2019-2021 Status Research & Development GmbH
 # Licensed and distributed under either of
-#   * MIT license: [LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT
-#   * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+#   * MIT license: http://opensource.org/licenses/MIT
+#   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 # Exceptions coming out of this library are mostly handled but, due to bugs
@@ -22,7 +22,8 @@ when defined(arm):
 
 import locks, net, os, sets, tables, times
 when defined(metrics):
-  import algorithm, hashes, random, sequtils, strutils
+  import algorithm, hashes, random, sequtils, strutils,
+    metrics/common
   when defined(posix):
     import posix
 
@@ -69,12 +70,6 @@ const CONTENT_TYPE* = "text/plain; version=0.0.4; charset=utf-8"
 #########
 
 when defined(metrics):
-  proc printError(msg: string) =
-    try:
-      writeLine(stderr, "metrics error: " & msg)
-    except IOError:
-      discard
-
   proc toMilliseconds*(time: times.Time): int64 =
     return convert(Seconds, Milliseconds, time.toUnix()) + convert(Nanoseconds, Milliseconds, time.nanosecond())
 
@@ -160,33 +155,6 @@ when defined(metrics):
         raise newException(ValueError, "Invalid label: '" & label & "'. It should not start with '__'.")
       if label in invalidLabelNames:
         raise newException(ValueError, "Invalid label: '" & label & "'. It should not be one of: " & $invalidLabelNames & ".")
-
-  proc ignoreSignalsInThread() =
-    # Block all signals in this thread, so we don't interfere with regular signal
-    # handling elsewhere.
-    when defined(posix):
-      var signalMask, oldSignalMask: Sigset
-
-      # sigprocmask() doesn't work on macOS, for multithreaded programs
-      if sigfillset(signalMask) != 0:
-        echo osErrorMsg(osLastError())
-        quit(QuitFailure)
-      when defined(boehmgc):
-        # https://www.hboehm.info/gc/debugging.html
-        const
-          SIGPWR = 30
-          SIGXCPU = 24
-          SIGSEGV = 11
-          SIGBUS = 7
-        if sigdelset(signalMask, SIGPWR) != 0 or
-          sigdelset(signalMask, SIGXCPU) != 0 or
-          sigdelset(signalMask, SIGSEGV) != 0 or
-          sigdelset(signalMask, SIGBUS) != 0:
-          echo osErrorMsg(osLastError())
-          quit(QuitFailure)
-      if pthread_sigmask(SIG_BLOCK, signalMask, oldSignalMask) != 0:
-        echo osErrorMsg(osLastError())
-        quit(QuitFailure)
 
 ######################
 # generic collectors #
@@ -973,50 +941,6 @@ when defined(metrics):
     except CatchableError as e:
       printError(e.msg)
 
-################################
-# HTTP server (for Prometheus) #
-################################
-
-when defined(metrics):
-  {.pop.} # raises - no matter what, can't annotate async methods
-  import asynchttpserver, asyncdispatch
-
-  type HttpServerArgs = tuple[address: string, port: Port]
-  var httpServerThread: Thread[HttpServerArgs]
-
-  proc httpServer(args: HttpServerArgs) {.thread.} =
-    ignoreSignalsInThread()
-
-    let (address, port) = args
-    var server = newAsyncHttpServer(reuseAddr = true, reusePort = true)
-
-    proc cb(req: Request) {.async.} =
-      try:
-        if req.url.path == "/metrics":
-          {.gcsafe.}:
-              # Prometheus will drop our metrics in surprising ways if we give it
-              # timestamps, so we don't.
-              await req.respond(Http200,
-                                defaultRegistry.toText(showTimestamp = false),
-                                newHttpHeaders([("Content-Type", CONTENT_TYPE)]))
-        else:
-          await req.respond(Http404, "Try /metrics")
-      except CatchableError as e:
-        printError(e.msg)
-
-    while true:
-      try:
-        waitFor server.serve(port, cb, address)
-      except CatchableError as e:
-        printError(e.msg)
-        sleep(1000)
-
-  {.push raises: [Defect].}
-
-proc startHttpServer*(address = "127.0.0.1", port = Port(8000)) {.raises: [Exception].} =
-  when defined(metrics):
-    httpServerThread.createThread(httpServer, (address, port))
-
 #######################################
 # export metrics to StatsD and Carbon #
 #######################################
@@ -1188,4 +1112,3 @@ when defined(metrics):
       printError(e.msg)
 
   exportThread.createThread(pushMetricsWorker)
-

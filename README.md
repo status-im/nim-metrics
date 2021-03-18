@@ -299,20 +299,40 @@ suite "counter":
 
 ## Prometheus endpoint
 
-Start an HTTP server listening on 127.0.0.1:8000 from which the Prometheus
-daemon can pull the metrics from all collectors in `defaultRegistry`, plus the
-default ones:
+First, you need to choose the HTTP server implementation.
+
+### Standard library
+
+Using [asynchttpserver](https://nim-lang.org/docs/asynchttpserver.html) which is based on [asyncdispatch](https://nim-lang.org/docs/asyncdispatch.html) from the Nim standard library:
 
 ```nim
-startHttpServer()
+import metrics, metrics/stdlib_httpserver
+```
+
+### Chronos
+
+Using [Chronos](https://github.com/status-im/nim-chronos/) - an asyncdispatch alternative:
+
+```nim
+import metrics, metrics/chronos_httpserver
+```
+
+### Starting the HTTP server
+
+Start an HTTP server listening on 127.0.0.1:8000 from which the Prometheus
+daemon can pull the metrics from all collectors in `defaultRegistry` (plus the
+default metrics):
+
+```nim
+startMetricsHttpServer()
 ```
 
 Or set your own address and port to listen to:
 
 ```nim
-import metrics, net
+import net
 
-startHttpServer("127.0.0.1", Port(8000))
+startMetricsHttpServer("127.0.0.1", Port(8000))
 ```
 
 The HTTP server will run in its own thread. You can open
@@ -338,7 +358,7 @@ The `process_*` metrics are only available on Linux, for now.
 `-d:nimTypeNames` and holds the top 5 instance types, in reverse order of their
 total heap usage, at the time the metric is created.
 
-Screenshot of [Grafana showing data from Prometheus that pulls it from Nimbus which uses nim-metrics](https://github.com/status-im/nimbus/tree/devel#metric-visualisation):
+Screenshot of [Grafana showing data from Prometheus that pulls it from Nimbus which uses nim-metrics](https://github.com/status-im/nimbus-eth1/#metric-visualisation):
 
 ![Grafana screenshot](https://i.imgur.com/AdtavDA.png)
 
