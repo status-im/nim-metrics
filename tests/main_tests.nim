@@ -60,8 +60,11 @@ suite "counter":
     counter("one_off_counter").inc(0.5)
     check counter("one_off_counter").value == 1.5
 
-    # confusing, but allowed
-    check gauge("one_off_counter").value == 0
+    # # Can't have different collector types with the same name, but unittest
+    # # can't catch an exception raised in the assignment to a {.global.}
+    # # variable.
+    # expect RegistrationError:
+      # check gauge("one_off_counter").value == 0
 
     # colons in name
     counter("one:off:counter:colons").inc()
@@ -185,11 +188,11 @@ suite "gauge":
     # echo registry
 
   test "timing with labels":
-    declareGauge lgauge, "help", @["foobar"], registry = registry
+    declareGauge lgauge2, "help", @["foobar"], registry = registry
     let labelValues = @["b"]
-    lgauge.time(labelValues):
+    lgauge2.time(labelValues):
       sleep(1000)
-    check lgauge.value(labelValues) >= 1
+    check lgauge2.value(labelValues) >= 1
 
   test "names with colons":
     declareGauge cGauge, "gauge with colons in name", registry = registry, name = "foo:bar:baz"
@@ -326,4 +329,11 @@ suite "histogram":
     check cHistogram.valueByName("foo:bar:baz_count") == 1
     check cHistogram.valueByName("foo:bar:baz_sum") == 10
     # echo cHistogram
+
+import ./duplicate_coll_mod
+suite "registry":
+  test "duplicate collectors":
+    expect RegistrationError:
+      declareCounter duplicate_counter, "duplicate counter"
+      duplicate_counter.inc()
 

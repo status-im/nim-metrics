@@ -166,6 +166,12 @@ when defined(metrics):
       result = result !& label.hash
     result = !$result
 
+  # Hash-based data types like OrderedSet don't just compare hashes to determine
+  # if a key is present, but also compare the keys themselves, so we need to
+  # override the `==` operator.
+  method `==`*(x, y: Collector): bool {.base.} =
+    x.name == y.name and x.labels == y.labels
+
   method collect*(collector: Collector): Metrics {.base.} =
     return collector.metrics
 
@@ -228,7 +234,7 @@ proc register* [T] (collector: T, registry = defaultRegistry) {.raises: [Defect,
   when defined(metrics):
     withLock registry.lock:
       if collector in registry.collectors:
-        raise newException(RegistrationError, "Collector already registered.")
+        raise newException(RegistrationError, "Collector already registered: " & collector.name)
 
       registry.collectors.incl(collector)
 

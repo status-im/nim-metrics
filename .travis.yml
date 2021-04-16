@@ -21,6 +21,8 @@ install:
   - env MAKE="make -j2" bash build_nim.sh Nim csources dist/nimble NimBinaries
   - export PATH=$PWD/Nim/bin:$PATH
   - nimble install -y
+  - nimble uninstall -y metrics
+  - nimble develop
   - nimble install chronicles -y
 
 script:

@@ -37,6 +37,8 @@ install:
 build_script:
   - cd C:\projects\%APPVEYOR_PROJECT_SLUG%
   - nimble install -y
+  - nimble uninstall -y metrics
+  - nimble develop
   - nimble install chronicles -y
 
 test_script:
