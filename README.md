@@ -337,6 +337,8 @@ startMetricsHttpServer("127.0.0.1", Port(8000))
 The HTTP server will run in its own thread. You can open
 "http://127.0.0.1:8000/metrics" in a browser to see what Prometheus sees.
 
+### System metrics
+
 Default metrics available (see also [the relevant Prometheus docs](https://prometheus.io/docs/instrumenting/writing_clientlibs/#standard-and-runtime-collectors)):
 
 ```text
@@ -354,8 +356,33 @@ nim_gc_heap_instance_occupied_bytes[type_name]
 The `process_*` metrics are only available on Linux, for now.
 
 `nim_gc_heap_instance_occupied_bytes` is only available when compiling with
-`-d:nimTypeNames` and holds the top 5 instance types, in reverse order of their
-total heap usage, at the time the metric is created.
+`-d:nimTypeNames` and holds the top 10 instance types, in reverse order of
+their total heap usage (from all threads), at the time the metric is created.
+Since this set changes with time, you'll see more than 10 types in Grafana.
+
+These system metrics are being updated automatically when a user-defined metric
+is changed in the main thread, but only if a minimal interval has passed since
+the last update (defaults to 10 second).
+
+```nim
+import times
+when defined(metrics):
+  # get the default minimal update interval
+  echo getSystemMetricsUpdateInterval()
+  # you can change it
+  setSystemMetricsUpdateInterval(initDuration(seconds = 2))
+```
+
+You can also disable this automated piggy-backing on user-defined metric value
+changes, if you need more regularity, and take charge of updating system
+metrics yourself.
+
+```nim
+# disable automatic updates
+setSystemMetricsAutomaticUpdate(false)
+# somewhere in your event loop, at an interval of your choice
+updateSystemMetrics()
+```
 
 Screenshot of [Grafana showing data from Prometheus that pulls it from Nimbus which uses nim-metrics](https://github.com/status-im/nimbus-eth1/#metric-visualisation):
 
