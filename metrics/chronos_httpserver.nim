@@ -34,6 +34,8 @@ when defined(metrics):
               let response = defaultRegistry.toText(showTimestamp = false)
               let headers = HttpTable.init([("Content-Type", CONTENT_TYPE)])
               return await request.respond(Http200, response, headers)
+          elif request.uri.path == "/health":
+            return await request.respond(Http200, "OK")
           else:
             return await request.respond(Http404, "Try /metrics")
         except CatchableError as exc:

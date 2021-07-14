@@ -35,6 +35,8 @@ when defined(metrics):
               await req.respond(Http200,
                                 defaultRegistry.toText(showTimestamp = false),
                                newHttpHeaders([("Content-Type", CONTENT_TYPE)]))
+        elif req.url.path == "/health":
+          await req.respond(Http200, "OK")
         else:
           await req.respond(Http404, "Try /metrics")
       except CatchableError as e:
