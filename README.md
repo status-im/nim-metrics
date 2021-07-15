@@ -318,7 +318,7 @@ import metrics, metrics/chronos_httpserver
 
 ### Starting the HTTP server
 
-Start an HTTP server listening on 127.0.0.1:8000 from which the Prometheus
+Start an HTTP server listening on `127.0.0.1:8000` from which the Prometheus
 daemon can pull the metrics from all collectors in `defaultRegistry` (plus the
 default metrics):
 
@@ -334,8 +334,10 @@ import net
 startMetricsHttpServer("127.0.0.1", Port(8000))
 ```
 
-The HTTP server will run in its own thread. You can open
-"http://127.0.0.1:8000/metrics" in a browser to see what Prometheus sees.
+The HTTP server will run in its own thread. It will expose two endpoints:
+
+* http://127.0.0.1:8000/metrics - Returns the metrics consumed by Prometheus.
+* http://127.0.0.1:8000/health - Healthcheck that returns `OK` string and 200 code.
 
 Default metrics available (see also [the relevant Prometheus docs](https://prometheus.io/docs/instrumenting/writing_clientlibs/#standard-and-runtime-collectors)):
 
