@@ -8,6 +8,8 @@ import net, os, unittest,
       ../metrics
 
 when defined(metrics):
+  import times
+
   addExportBackend(
     metricProtocol = STATSD,
     netProtocol = UDP,
@@ -336,4 +338,20 @@ suite "registry":
     expect RegistrationError:
       declareCounter duplicate_counter, "duplicate counter"
       duplicate_counter.inc()
+
+suite "system metrics":
+  test "change update interval":
+    when defined(metrics):
+      declareGauge myGauge, "my gauge"
+      myGauge.set(1)
+      # echo defaultRegistry
+      echo getSystemMetricsUpdateInterval()
+      setSystemMetricsUpdateInterval(initDuration(seconds = 1))
+      echo getSystemMetricsUpdateInterval()
+      sleep(2)
+      myGauge.set(2)
+      # echo defaultRegistry
+      echo getSystemMetricsAutomaticUpdate()
+      setSystemMetricsAutomaticUpdate(false)
+      updateSystemMetrics()
 

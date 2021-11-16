@@ -322,8 +322,21 @@ when defined(metrics):
                           port: port
                         ))
 
-  proc pushMetrics*(name: string, value: float64, increment = 0.float64, metricType: string, timestamp: int64, sampleRate = 1.float) {.raises: [Defect].} =
+  proc updateSystemMetrics*() # defined later in this file
+  var systemMetricsAutomaticUpdate = true # whether to piggy-back on changes of user-defined metrics
+
+  proc getSystemMetricsAutomaticUpdate*(): bool =
+    return systemMetricsAutomaticUpdate
+
+  proc setSystemMetricsAutomaticUpdate*(value: bool) =
+    systemMetricsAutomaticUpdate = value
+
+  proc pushMetrics*(name: string, value: float64, increment = 0.float64, metricType: string,
+    timestamp: int64, sampleRate = 1.float, doUpdateSystemMetrics = true) {.raises: [Defect].} =
     # this may run from different threads
+
+    if systemMetricsAutomaticUpdate and doUpdateSystemMetrics:
+      updateSystemMetrics()
 
     if len(exportBackends) == 0:
       # no backends configured
@@ -655,7 +668,7 @@ proc decGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam 
   when defined(metrics):
     gauge.inc((-amount).float64, labelValues)
 
-proc setGauge(gauge: Gauge, value: int64|float64, labelValues: LabelsParam = @[]) =
+proc setGauge(gauge: Gauge, value: int64|float64, labelValues: LabelsParam = @[], doUpdateSystemMetrics: bool) =
   when defined(metrics):
     try:
       var timestamp = getTime().toMilliseconds()
@@ -667,7 +680,8 @@ proc setGauge(gauge: Gauge, value: int64|float64, labelValues: LabelsParam = @[]
         pushMetrics(name = gauge.name,
                     value = value.float64,
                     metricType = "g",
-                    timestamp = timestamp)
+                    timestamp = timestamp,
+                    doUpdateSystemMetrics = doUpdateSystemMetrics)
     except Exception as e:
       printError(e.msg)
 
@@ -680,9 +694,9 @@ template dec*(gauge: Gauge | type IgnoredCollector, amount: int64|float64 = 1, l
   when defined(metrics) and gauge is not IgnoredCollector:
     {.gcsafe.}: decGauge(gauge, amount, labelValues)
 
-template set*(gauge: Gauge | type IgnoredCollector, value: int64|float64, labelValues: LabelsParam = @[]) =
+template set*(gauge: Gauge | type IgnoredCollector, value: int64|float64, labelValues: LabelsParam = @[], doUpdateSystemMetrics = true) =
   when defined(metrics) and gauge is not IgnoredCollector:
-    {.gcsafe.}: setGauge(gauge, value, labelValues)
+    {.gcsafe.}: setGauge(gauge, value, labelValues, doUpdateSystemMetrics)
 
 # in seconds
 proc setToCurrentTime*(gauge: Gauge | type IgnoredCollector, labelValues: LabelsParam = @[]) =
@@ -933,6 +947,43 @@ template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: 
   when defined(metrics):
     {.gcsafe.}: observeHistogram(histogram, amount, labelValues)
 
+#########################
+# update system metrics #
+#########################
+
+when defined(metrics):
+  type systemMetricsUpdateProc = proc()
+  let mainThreadID = getThreadId()
+  var
+    systemMetricsUpdateProcs: seq[systemMetricsUpdateProc]
+    systemMetricsUpdateInterval = initDuration(seconds = 10)
+    systemMetricsLastUpdated = now()
+
+  proc getSystemMetricsUpdateInterval*(): Duration =
+    return systemMetricsUpdateInterval
+
+  proc setSystemMetricsUpdateInterval*(value: Duration) =
+    systemMetricsUpdateInterval = value
+
+  proc updateSystemMetrics*() =
+    var doUpdate = false
+
+    if systemMetricsAutomaticUpdate:
+      # Update system metrics if at least systemMetricsUpdateInterval seconds
+      # have passed and if we are being called from the main thread.
+      if getThreadId() == mainThreadID:
+        let currTime = now()
+        if currTime >= (systemMetricsLastUpdated + systemMetricsUpdateInterval):
+          systemMetricsLastUpdated = currTime
+          doUpdate = true
+    else:
+      # We're being called directly by the API user, so don't introduce any conditions.
+      doUpdate = true
+
+    if doUpdate:
+      for updateProc in systemMetricsUpdateProcs:
+        updateProc()
+
 ################
 # process info #
 ################
@@ -940,19 +991,14 @@ template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: 
 when defined(metrics) and defined(linux):
   import posix
 
-  type ProcessInfo = ref object of Gauge
-
-  proc newProcessInfo*(name: string, help: string, registry = defaultRegistry): ProcessInfo {.raises: [Defect, ValueError, RegistrationError].} =
-    validateName(name)
-    result = ProcessInfo(name: name,
-                        help: help,
-                        typ: "gauge", # Prometheus won't allow fantasy types in here
-                        creationThreadId: getThreadId())
-    result.lock.initLock()
-    result.register(registry)
+  declareGauge process_virtual_memory_bytes, "virtual memory size in bytes"
+  declareGauge process_resident_memory_bytes, "resident memory size in bytes"
+  declareGauge process_start_time_seconds, "start time of the process since unix epoch in seconds"
+  declareGauge process_cpu_seconds_total, "total user and system CPU time spent in seconds"
+  declareGauge process_max_fds, "maximum number of open file descriptors"
+  declareGauge process_open_fds, "number of open file descriptors"
 
   var
-    processInfo* {.global.} = newProcessInfo("process_info", "CPU and memory usage")
     btime {.global.}: float64 = 0
     ticks {.global.}: float64 # clock ticks per second
     pagesize {.global.}: float64 # page size in bytes
@@ -968,11 +1014,7 @@ when defined(metrics) and defined(linux):
     ticks = sysconf(SC_CLK_TCK).float64
     pagesize = sysconf(SC_PAGE_SIZE).float64
 
-  method collect*(collector: ProcessInfo): Metrics =
-    let timestamp = getTime().toMilliseconds()
-    result = initOrderedTable[Labels, seq[Metric]]()
-    result[@[]] = @[]
-
+  proc updateProcessInfo() =
     try:
       if btime == 0:
         # we couldn't access /proc
@@ -983,90 +1025,40 @@ when defined(metrics) and defined(linux):
       # $ cat /proc/self/stat
       # 30494 (cat) R 3022 30494 3022 34830 30494 4210688 98 0 0 0 0 0 0 0 20 0 1 0 73800491 10379264 189 18446744073709551615 94060049248256 94060049282149 140735229395104 0 0 0 0 0 0 0 0 0 17 6 0 0 0 0 0 94060049300560 94060049302112 94060076990464 140735229397011 140735229397031 140735229397031 140735229403119 0
       let selfStat = readFile("/proc/self/stat").split(") ")[^1].split(' ')
-      result[@[]] = @[
-        Metric(
-          name: "process_virtual_memory_bytes", # Virtual memory size in bytes.
-          value: selfStat[20].parseFloat(),
-          timestamp: timestamp,
-        ),
-        Metric(
-          name: "process_resident_memory_bytes", # Resident memory size in bytes.
-          value: selfStat[21].parseFloat() * pagesize,
-          timestamp: timestamp,
-        ),
-        Metric(
-          name: "process_start_time_seconds", # Start time of the process since unix epoch in seconds.
-          value: selfStat[19].parseFloat() / ticks + btime,
-          timestamp: timestamp,
-        ),
-        Metric(
-          name: "process_cpu_seconds_total", # Total user and system CPU time spent in seconds.
-          value: (selfStat[11].parseFloat() + selfStat[12].parseFloat()) / ticks,
-          timestamp: timestamp,
-        ),
-      ]
+
+      process_virtual_memory_bytes.set(selfStat[20].parseFloat(), doUpdateSystemMetrics = false)
+      process_resident_memory_bytes.set(selfStat[21].parseFloat() * pagesize, doUpdateSystemMetrics = false)
+      process_start_time_seconds.set(selfStat[19].parseFloat() / ticks + btime, doUpdateSystemMetrics = false)
+      process_cpu_seconds_total.set((selfStat[11].parseFloat() + selfStat[12].parseFloat()) / ticks, doUpdateSystemMetrics = false)
 
       for line in lines("/proc/self/limits"):
         if line.startsWith("Max open files"):
-          result[@[]].add(
-            Metric(
-              name: "process_max_fds", # Maximum number of open file descriptors.
-              value: line.splitWhiteSpace()[3].parseFloat(), # a simple `split()` does not combine adjacent whitespace
-              timestamp: timestamp,
-            )
-          )
+          process_max_fds.set(line.splitWhiteSpace()[3].parseFloat(), doUpdateSystemMetrics = false) # a simple `split()` does not combine adjacent whitespace
           break
 
-      result[@[]].add(
-        Metric(
-          name: "process_open_fds", # Number of open file descriptors.
-          value: toSeq(walkDir("/proc/self/fd")).len.float64,
-          timestamp: timestamp,
-        )
-      )
+      process_open_fds.set(toSeq(walkDir("/proc/self/fd")).len.float64, doUpdateSystemMetrics = false)
     except CatchableError as e:
       printError(e.msg)
+
+  systemMetricsUpdateProcs.add(updateProcessInfo)
 
 ####################
 # Nim runtime info #
 ####################
 
 when defined(metrics):
-  type RuntimeInfo = ref object of Gauge
+  declareGauge nim_gc_mem_bytes, "the number of bytes that are owned by the main thread"
+  declareGauge nim_gc_mem_occupied_bytes, "the number of bytes that are owned by the main thread and hold data"
+  declareGauge nim_gc_heap_instance_occupied_bytes, "total bytes occupied, by instance type (all threads)", ["type_name"]
 
-  proc newRuntimeInfo*(name: string, help: string, registry = defaultRegistry): RuntimeInfo {.raises: [Defect, ValueError, RegistrationError].} =
-    validateName(name)
-    result = RuntimeInfo(name: name,
-                        help: help,
-                        typ: "gauge",
-                        creationThreadId: getThreadId())
-    result.lock.initLock()
-    result.register(registry)
-
-  var
-    runtimeInfo* {.global.} = newRuntimeInfo("nim_runtime_info", "Nim runtime info")
-
-  method collect*(collector: RuntimeInfo): Metrics =
-    result = initOrderedTable[Labels, seq[Metric]]()
-    result[@[]] = @[]
-    let timestamp = getTime().toMilliseconds()
+  proc updateNimRuntimeInfo() =
     try:
       when declared(getTotalMem):
-        result[@[]].add(
-          Metric(
-            name: "nim_gc_mem_bytes", # the number of bytes that are owned by the process
-            value: getTotalMem().float64,
-            timestamp: timestamp,
-          )
-        )
+        nim_gc_mem_bytes.set(getTotalMem().float64, doUpdateSystemMetrics = false)
+
       when declared(getOccupiedMem):
-        result[@[]].add(
-          Metric(
-            name: "nim_gc_mem_occupied_bytes", # the number of bytes that are owned by the process and hold data
-            value: getOccupiedMem().float64,
-            timestamp: timestamp,
-          )
-        )
+        nim_gc_mem_occupied_bytes.set(getOccupiedMem().float64, doUpdateSystemMetrics = false)
+
       # TODO: parse the output of `GC_getStatistics()` for more stats
 
       when defined(nimTypeNames) and declared(dumpHeapInstances):
@@ -1093,15 +1085,9 @@ when defined(metrics):
         # Lower the number of metrics to reduce metric cardinality.
         for i in 0..<labelsLimit:
           let (typeName, size) = heapSizes[i]
-          result[@[]].add(
-            Metric(
-              name: "nim_gc_heap_instance_occupied_bytes", # total bytes occupied by instance type
-              value: size.float64,
-              timestamp: timestamp,
-              labels: @["type_name"],
-              labelValues: @[$typeName],
-            )
-          )
+          nim_gc_heap_instance_occupied_bytes.set(size.float64, labelValues = @[$typeName], doUpdateSystemMetrics = false)
     except CatchableError as e:
       printError(e.msg)
+
+  systemMetricsUpdateProcs.add(updateNimRuntimeInfo)
 
