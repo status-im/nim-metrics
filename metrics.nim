@@ -952,10 +952,13 @@ template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: 
 #########################
 
 when defined(metrics):
-  type systemMetricsUpdateProc = proc()
+  type
+    systemMetricsUpdateProc = proc()
+    threadMetricsUpdateProc = proc()
   let mainThreadID = getThreadId()
   var
     systemMetricsUpdateProcs: seq[systemMetricsUpdateProc]
+    threadMetricsUpdateProcs: seq[threadMetricsUpdateProc]
     systemMetricsUpdateInterval = initDuration(seconds = 10)
     systemMetricsLastUpdated = now()
 
@@ -964,6 +967,10 @@ when defined(metrics):
 
   proc setSystemMetricsUpdateInterval*(value: Duration) =
     systemMetricsUpdateInterval = value
+
+  proc updateThreadMetrics*() =
+    for updateProc in threadMetricsUpdateProcs:
+      updateProc()
 
   proc updateSystemMetrics*() =
     var doUpdate = false
@@ -976,6 +983,9 @@ when defined(metrics):
         if currTime >= (systemMetricsLastUpdated + systemMetricsUpdateInterval):
           systemMetricsLastUpdated = currTime
           doUpdate = true
+          # Update thread metrics, only when automation is on and we're in the
+          # main thread.
+          updateThreadMetrics()
     else:
       # We're being called directly by the API user, so don't introduce any conditions.
       doUpdate = true
@@ -1047,29 +1057,25 @@ when defined(metrics) and defined(linux):
 ####################
 
 when defined(metrics):
-  declareGauge nim_gc_mem_bytes, "the number of bytes that are owned by the main thread"
-  declareGauge nim_gc_mem_occupied_bytes, "the number of bytes that are owned by the main thread and hold data"
+  declareGauge nim_gc_mem_bytes, "the number of bytes that are owned by a thread's GC", ["thread_id"]
+  declareGauge nim_gc_mem_occupied_bytes, "the number of bytes that are owned by a thread's GC and hold data", ["thread_id"]
   declareGauge nim_gc_heap_instance_occupied_bytes, "total bytes occupied, by instance type (all threads)", ["type_name"]
+  declareGauge nim_gc_heap_instance_occupied_summed_bytes, "total bytes occupied by all instance types, in all threads - should be equal to 'sum(nim_gc_mem_occupied_bytes)' when 'updateThreadMetrics()' is being called in all threads, but it's somewhat smaller"
 
-  proc updateNimRuntimeInfo() =
+  proc updateNimRuntimeInfoGlobal() =
     try:
-      when declared(getTotalMem):
-        nim_gc_mem_bytes.set(getTotalMem().float64, doUpdateSystemMetrics = false)
-
-      when declared(getOccupiedMem):
-        nim_gc_mem_occupied_bytes.set(getOccupiedMem().float64, doUpdateSystemMetrics = false)
-
-      # TODO: parse the output of `GC_getStatistics()` for more stats
-
       when defined(nimTypeNames) and declared(dumpHeapInstances):
         # Too high cardinality causes performance issues in Prometheus.
         const labelsLimit = 10
-        # Higher size then in the loop for adding metrics
-        # to avoid missing same name metrics far apart with low values.
-        var heapSizes: array[100, (cstring, int)]
-        var counter: int
+        var
+          # Higher size than in the loop for adding metrics
+          # to avoid missing same name metrics far apart with low values.
+          heapSizes: array[100, (cstring, int)]
+          counter: int
+          heapSum: int # total size of all instances
         for data in dumpHeapInstances():
           counter += 1
+          heapSum += data.sizes
           var smallest = 0
           var dedupe = false
           for i in 0..<heapSizes.len:
@@ -1086,8 +1092,24 @@ when defined(metrics):
         for i in 0..<labelsLimit:
           let (typeName, size) = heapSizes[i]
           nim_gc_heap_instance_occupied_bytes.set(size.float64, labelValues = @[$typeName], doUpdateSystemMetrics = false)
+        nim_gc_heap_instance_occupied_summed_bytes.set(heapSum.float64, doUpdateSystemMetrics = false)
     except CatchableError as e:
       printError(e.msg)
 
-  systemMetricsUpdateProcs.add(updateNimRuntimeInfo)
+  systemMetricsUpdateProcs.add(updateNimRuntimeInfoGlobal)
 
+  proc updateNimRuntimeInfoThread() =
+    try:
+      let threadID = getThreadId()
+
+      when declared(getTotalMem):
+        nim_gc_mem_bytes.set(getTotalMem().float64, labelValues = @[$threadID], doUpdateSystemMetrics = false)
+
+      when declared(getOccupiedMem):
+        nim_gc_mem_occupied_bytes.set(getOccupiedMem().float64, labelValues = @[$threadID], doUpdateSystemMetrics = false)
+
+      # TODO: parse the output of `GC_getStatistics()` for more stats
+    except CatchableError as e:
+      printError(e.msg)
+
+  threadMetricsUpdateProcs.add(updateNimRuntimeInfoThread)
