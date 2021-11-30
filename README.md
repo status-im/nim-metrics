@@ -350,9 +350,10 @@ process_max_fds
 process_virtual_memory_bytes
 process_resident_memory_bytes
 process_start_time_seconds
-nim_gc_mem_bytes
-nim_gc_mem_occupied_bytes
+nim_gc_mem_bytes[thread_id]
+nim_gc_mem_occupied_bytes[thread_id]
 nim_gc_heap_instance_occupied_bytes[type_name]
+nim_gc_heap_instance_occupied_summed_bytes
 ```
 
 The `process_*` metrics are only available on Linux, for now.
@@ -384,7 +385,12 @@ metrics yourself.
 setSystemMetricsAutomaticUpdate(false)
 # somewhere in your event loop, at an interval of your choice
 updateSystemMetrics()
+updateThreadMetrics()
 ```
+
+Those metrics with with a "thread\_id" label are thread-specific metrics. The
+automatic update only covers thread metrics for the main thread. You'll have to
+call `updateThreadMetrics()` by yourself for any other thread you care about.
 
 Screenshot of [Grafana showing data from Prometheus that pulls it from Nimbus which uses nim-metrics](https://github.com/status-im/nimbus-eth1/#metric-visualisation):
 
