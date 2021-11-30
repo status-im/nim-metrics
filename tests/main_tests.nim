@@ -354,4 +354,5 @@ suite "system metrics":
       echo getSystemMetricsAutomaticUpdate()
       setSystemMetricsAutomaticUpdate(false)
       updateSystemMetrics()
+      updateThreadMetrics()
 

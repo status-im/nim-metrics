@@ -953,12 +953,12 @@ template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: 
 
 when defined(metrics):
   type
-    systemMetricsUpdateProc = proc()
-    threadMetricsUpdateProc = proc()
+    SystemMetricsUpdateProc = proc()
+    ThreadMetricsUpdateProc = proc()
   let mainThreadID = getThreadId()
   var
-    systemMetricsUpdateProcs: seq[systemMetricsUpdateProc]
-    threadMetricsUpdateProcs: seq[threadMetricsUpdateProc]
+    systemMetricsUpdateProcs: seq[SystemMetricsUpdateProc]
+    threadMetricsUpdateProcs: seq[ThreadMetricsUpdateProc]
     systemMetricsUpdateInterval = initDuration(seconds = 10)
     systemMetricsLastUpdated = now()
 
