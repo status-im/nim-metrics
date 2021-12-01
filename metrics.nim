@@ -954,8 +954,8 @@ template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: 
 when defined(metrics):
   const metrics_max_hooks = 16
   type
-    SystemMetricsUpdateProc = proc() {.gcsafe.}
-    ThreadMetricsUpdateProc = proc() {.gcsafe.}
+    SystemMetricsUpdateProc = proc() {.gcsafe, nimcall.}
+    ThreadMetricsUpdateProc = proc() {.gcsafe, nimcall.}
   let mainThreadID = getThreadId()
   var
     systemMetricsUpdateProcs: array[metrics_max_hooks, SystemMetricsUpdateProc]
@@ -972,14 +972,13 @@ when defined(metrics):
     systemMetricsUpdateInterval = value
 
   proc updateThreadMetrics*() {.gcsafe.} =
-    {.gcsafe.}:
-      for i in 0 ..< threadMetricsUpdateProcsIndex:
-        try:
-          threadMetricsUpdateProcs[i]()
-        except CatchableError as e:
-          printError(e.msg)
-        except Exception as e:
-          raise newException(Defect, e.msg)
+    for i in 0 ..< threadMetricsUpdateProcsIndex:
+      try:
+        threadMetricsUpdateProcs[i]()
+      except CatchableError as e:
+        printError(e.msg)
+      except Exception as e:
+        raise newException(Defect, e.msg)
 
   proc updateSystemMetrics*() {.gcsafe.} =
     var doUpdate = false
@@ -1000,14 +999,13 @@ when defined(metrics):
       doUpdate = true
 
     if doUpdate:
-      {.gcsafe.}:
-        for i in 0 ..< systemMetricsUpdateProcsIndex:
-          try:
-            systemMetricsUpdateProcs[i]()
-          except CatchableError as e:
-            printError(e.msg)
-          except Exception as e:
-            raise newException(Defect, e.msg)
+      for i in 0 ..< systemMetricsUpdateProcsIndex:
+        try:
+          systemMetricsUpdateProcs[i]()
+        except CatchableError as e:
+          printError(e.msg)
+        except Exception as e:
+          raise newException(Defect, e.msg)
 
 ################
 # process info #
