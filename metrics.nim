@@ -322,7 +322,7 @@ when defined(metrics):
                           port: port
                         ))
 
-  proc updateSystemMetrics*() # defined later in this file
+  proc updateSystemMetrics*() {.gcsafe.} # defined later in this file
   var systemMetricsAutomaticUpdate = true # whether to piggy-back on changes of user-defined metrics
 
   proc getSystemMetricsAutomaticUpdate*(): bool =
@@ -952,13 +952,16 @@ template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: 
 #########################
 
 when defined(metrics):
+  const metrics_max_hooks = 16
   type
-    SystemMetricsUpdateProc = proc()
-    ThreadMetricsUpdateProc = proc()
+    SystemMetricsUpdateProc = proc() {.gcsafe, nimcall.}
+    ThreadMetricsUpdateProc = proc() {.gcsafe, nimcall.}
   let mainThreadID = getThreadId()
   var
-    systemMetricsUpdateProcs: seq[SystemMetricsUpdateProc]
-    threadMetricsUpdateProcs: seq[ThreadMetricsUpdateProc]
+    systemMetricsUpdateProcs: array[metrics_max_hooks, SystemMetricsUpdateProc]
+    systemMetricsUpdateProcsIndex = 0
+    threadMetricsUpdateProcs: array[metrics_max_hooks, ThreadMetricsUpdateProc]
+    threadMetricsUpdateProcsIndex = 0
     systemMetricsUpdateInterval = initDuration(seconds = 10)
     systemMetricsLastUpdated = now()
 
@@ -968,11 +971,16 @@ when defined(metrics):
   proc setSystemMetricsUpdateInterval*(value: Duration) =
     systemMetricsUpdateInterval = value
 
-  proc updateThreadMetrics*() =
-    for updateProc in threadMetricsUpdateProcs:
-      updateProc()
+  proc updateThreadMetrics*() {.gcsafe.} =
+    for i in 0 ..< threadMetricsUpdateProcsIndex:
+      try:
+        threadMetricsUpdateProcs[i]()
+      except CatchableError as e:
+        printError(e.msg)
+      except Exception as e:
+        raise newException(Defect, e.msg)
 
-  proc updateSystemMetrics*() =
+  proc updateSystemMetrics*() {.gcsafe.} =
     var doUpdate = false
 
     if systemMetricsAutomaticUpdate:
@@ -991,8 +999,13 @@ when defined(metrics):
       doUpdate = true
 
     if doUpdate:
-      for updateProc in systemMetricsUpdateProcs:
-        updateProc()
+      for i in 0 ..< systemMetricsUpdateProcsIndex:
+        try:
+          systemMetricsUpdateProcs[i]()
+        except CatchableError as e:
+          printError(e.msg)
+        except Exception as e:
+          raise newException(Defect, e.msg)
 
 ################
 # process info #
@@ -1050,7 +1063,8 @@ when defined(metrics) and defined(linux):
     except CatchableError as e:
       printError(e.msg)
 
-  systemMetricsUpdateProcs.add(updateProcessInfo)
+  systemMetricsUpdateProcs[systemMetricsUpdateProcsIndex] = updateProcessInfo
+  systemMetricsUpdateProcsIndex += 1
 
 ####################
 # Nim runtime info #
@@ -1096,7 +1110,8 @@ when defined(metrics):
     except CatchableError as e:
       printError(e.msg)
 
-  systemMetricsUpdateProcs.add(updateNimRuntimeInfoGlobal)
+  systemMetricsUpdateProcs[systemMetricsUpdateProcsIndex] = updateNimRuntimeInfoGlobal
+  systemMetricsUpdateProcsIndex += 1
 
   proc updateNimRuntimeInfoThread() =
     try:
@@ -1112,4 +1127,5 @@ when defined(metrics):
     except CatchableError as e:
       printError(e.msg)
 
-  threadMetricsUpdateProcs.add(updateNimRuntimeInfoThread)
+  threadMetricsUpdateProcs[threadMetricsUpdateProcsIndex] = updateNimRuntimeInfoThread
+  threadMetricsUpdateProcsIndex += 1
