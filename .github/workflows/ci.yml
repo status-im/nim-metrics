@@ -20,7 +20,7 @@ jobs:
             cpu: amd64
           - os: windows
             cpu: amd64
-        branch: [version-1-2, version-1-4, devel]
+        branch: [version-1-2, version-1-4, version-1-6, devel]
         include:
           - target:
               os: linux
@@ -44,41 +44,6 @@ jobs:
     steps:
       - name: Git checkout
         uses: actions/checkout@v2
-
-      - name: Derive environment variables
-        shell: bash
-        run: |
-          if [[ '${{ matrix.target.cpu }}' == 'amd64' ]]; then
-            ARCH=64
-            PLATFORM=x64
-          else
-            ARCH=32
-            PLATFORM=x86
-          fi
-          echo "ARCH=$ARCH" >> $GITHUB_ENV
-          echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
-
-          if [[ '${{ matrix.target.os }}' == 'windows' ]]; then
-            MAKE_CMD="mingw32-make"
-          else
-            MAKE_CMD="make"
-          fi
-          echo "MAKE_CMD=$MAKE_CMD" >> $GITHUB_ENV
-
-          ncpu=
-          case '${{ runner.os }}' in
-          'Linux')
-            ncpu=$(nproc)
-            ;;
-          'macOS')
-            ncpu=$(sysctl -n hw.ncpu)
-            ;;
-          'Windows')
-            ncpu=$NUMBER_OF_PROCESSORS
-            ;;
-          esac
-          [[ -z "$ncpu" || $ncpu -le 0 ]] && ncpu=1
-          echo "ncpu=$ncpu" >> $GITHUB_ENV
 
       - name: Install build dependencies (Linux i386)
         if: runner.os == 'Linux' && matrix.target.cpu == 'i386'
@@ -136,26 +101,62 @@ jobs:
         run: |
           mkdir -p external
           curl -L "https://nim-lang.org/download/windeps.zip" -o external/windeps.zip
-          7z x -y external/windeps.zip -oexternal/dlls-${{ matrix.target.cpu }}
+          7z x -y external/windeps.zip -oexternal/dlls
 
       - name: Path to cached dependencies (Windows)
         if: >
           runner.os == 'Windows'
         run: |
-          echo "${{ github.workspace }}/external/dlls-${{ matrix.target.cpu }}" >> $GITHUB_PATH
+          echo "${{ github.workspace }}/external/dlls" >> $GITHUB_PATH
 
-      - name: Build the Nim compiler
+      - name: Derive environment variables
+        run: |
+          if [[ '${{ matrix.target.cpu }}' == 'amd64' ]]; then
+            PLATFORM=x64
+          else
+            PLATFORM=x86
+          fi
+          echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+
+          ncpu=
+          MAKE_CMD="make"
+          case '${{ runner.os }}' in
+          'Linux')
+            ncpu=$(nproc)
+            ;;
+          'macOS')
+            ncpu=$(sysctl -n hw.ncpu)
+            ;;
+          'Windows')
+            ncpu=$NUMBER_OF_PROCESSORS
+            MAKE_CMD="mingw32-make"
+            ;;
+          esac
+          [[ -z "$ncpu" || $ncpu -le 0 ]] && ncpu=1
+          echo "ncpu=$ncpu" >> $GITHUB_ENV
+          echo "MAKE_CMD=${MAKE_CMD}" >> $GITHUB_ENV
+
+      - name: Build Nim and Nimble
         run: |
           curl -O -L -s -S https://raw.githubusercontent.com/status-im/nimbus-build-system/master/scripts/build_nim.sh
-          env MAKE="${MAKE_CMD} -j${ncpu}" ARCH_OVERRIDE=${PLATFORM} CC=gcc NIM_COMMIT=${{ matrix.branch }} bash build_nim.sh nim csources dist/nimble NimBinaries
+          env MAKE="${MAKE_CMD} -j${ncpu}" ARCH_OVERRIDE=${PLATFORM} NIM_COMMIT=${{ matrix.branch }} \
+            QUICK_AND_DIRTY_COMPILER=1 QUICK_AND_DIRTY_NIMBLE=1 CC=gcc \
+            bash build_nim.sh nim csources dist/nimble NimBinaries
           echo '${{ github.workspace }}/nim/bin' >> $GITHUB_PATH
 
       - name: Run tests
         run: |
+          if [[ "${{ matrix.target.os }}" == "windows" ]]; then
+            # https://github.com/status-im/nimbus-eth2/issues/3121
+            export NIMFLAGS="-d:nimRawSetjmp"
+          fi
           nim --version
+          nimble --version
           nimble install -y --depsOnly
           nimble develop
-          nimble install chronicles -y
+          nimble install -y chronicles
           nimble test
           nimble test_chronicles
-
+          export TEST_LANG=cpp
+          nimble test
+          nimble test_chronicles

@@ -12,7 +12,7 @@ requires "nim >= 1.2.0",
          "chronos >= 2.6.0"
 
 ### Helper functions
-proc buildBinary(name: string, srcDir = "./", params = "", lang = "c") =
+proc buildBinary(name: string, srcDir = "./", params = "") =
   if not dirExists "build":
     mkDir "build"
   var extra_params = params
@@ -20,7 +20,7 @@ proc buildBinary(name: string, srcDir = "./", params = "", lang = "c") =
     # we're under Nim, not Nimble
     for i in 2..<paramCount():
       extra_params &= " " & paramStr(i)
-  exec "nim " & lang & " --out:./build/" & name & " -f --skipParentCfg --hints:off " & extra_params & " " & srcDir & name & ".nim"
+  exec "nim " & getEnv("TEST_LANG", "c") & " " & getEnv("NIMFLAGS") & " --out:./build/" & name & " -f --skipParentCfg --hints:off " & extra_params & " " & srcDir & name & ".nim"
 
 ### tasks
 task test, "Main tests":
