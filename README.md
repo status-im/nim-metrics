@@ -363,9 +363,10 @@ The `process_*` metrics are only available on Linux, for now.
 their total heap usage (from all threads), at the time the metric is created.
 Since this set changes with time, you'll see more than 10 types in Grafana.
 
-These system metrics are being updated automatically when a user-defined metric
+The thread-specific metrics are being updated automatically when a user-defined metric
 is changed in the main thread, but only if a minimal interval has passed since
-the last update (defaults to 10 second).
+the last update (defaults to 10 second). All other system metrics are custom
+collectors which are updated at collection time.
 
 ```nim
 import times
@@ -384,7 +385,6 @@ metrics yourself.
 # disable automatic updates
 setSystemMetricsAutomaticUpdate(false)
 # somewhere in your event loop, at an interval of your choice
-updateSystemMetrics()
 updateThreadMetrics()
 ```
 
