@@ -200,11 +200,10 @@ when defined(metrics):
     validateName(name)
     validateLabels(labels)
     result = T(name: name,
-                  help: help,
-                  typ: "gauge", # Prometheus does not support a non-standard value here
-                  labels: @labels,
-                  metrics: initOrderedTable[Labels, seq[Metric]](),
-                  creationThreadId: getThreadId())
+              help: help,
+              typ: "gauge", # Prometheus does not support a non-standard value here
+              labels: @labels,
+              creationThreadId: getThreadId())
     result.lock.initLock()
 
 proc `$`*(collector: type IgnoredCollector): string = ""
@@ -263,7 +262,6 @@ proc unregister* (collector: type IgnoredCollector, registry = defaultRegistry) 
 
 proc collect*(registry: Registry): OrderedTable[Collector, Metrics] =
   when defined(metrics):
-    result = initOrderedTable[Collector, Metrics]()
     withLock registry.lock:
       for collector in registry.collectors:
         var collectorCopy: Collector
@@ -497,7 +495,6 @@ when defined(metrics):
                     help: help,
                     typ: "counter",
                     labels: @labels,
-                    metrics: initOrderedTable[Labels, seq[Metric]](),
                     creationThreadId: getThreadId(),
                     sampleRate: sampleRate)
     result.lock.initLock()
@@ -625,7 +622,6 @@ when defined(metrics):
                   help: help,
                   typ: "gauge",
                   labels: @labels,
-                  metrics: initOrderedTable[Labels, seq[Metric]](),
                   creationThreadId: getThreadId())
     result.lock.initLock()
     if labels.len == 0:
@@ -780,7 +776,6 @@ when defined(metrics):
                     help: help,
                     typ: "summary",
                     labels: @labels,
-                    metrics: initOrderedTable[Labels, seq[Metric]](),
                     creationThreadId: getThreadId())
     result.lock.initLock()
     if labels.len == 0:
@@ -896,7 +891,6 @@ when defined(metrics):
                     help: help,
                     typ: "histogram",
                     labels: @labels,
-                    metrics: initOrderedTable[Labels, seq[Metric]](),
                     creationThreadId: getThreadId(),
                     buckets: bucketsSeq)
     result.lock.initLock()
@@ -1033,7 +1027,6 @@ when defined(metrics) and defined(linux):
 
   method collect*(collector: ProcessInfo): Metrics =
     let timestamp = getTime().toMilliseconds()
-    result = initOrderedTable[Labels, seq[Metric]]()
     result[@[]] = @[]
 
     try:
@@ -1102,7 +1095,6 @@ when defined(metrics):
 
   method collect*(collector: NimRuntimeInfo): Metrics =
     let timestamp = getTime().toMilliseconds()
-    result = initOrderedTable[Labels, seq[Metric]]()
     result[@[]] = @[]
 
     try:
