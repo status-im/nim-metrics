@@ -20,6 +20,7 @@ import locks, net, os, sets, tables, times
 when defined(metrics):
   import algorithm, hashes, random, sequtils, strutils,
     metrics/common
+  export tables # for custom collectors that need to work with the "Metrics" type
   when defined(posix):
     import posix
 
@@ -194,27 +195,19 @@ when defined(metrics):
   proc `$`*(collector: Collector): string =
     collector.toText()
 
-  # Used for custom collectors, to shield the API user from having to deal with
-  # internal details like lock initialisation.
-  proc buildCollector* [T] (typ: typedesc[T], name: string, help: string, labels: LabelsParam = @[]): T {.raises: [Defect, ValueError].} =
-    validateName(name)
-    validateLabels(labels)
-    result = T(name: name,
-              help: help,
-              typ: "gauge", # Prometheus does not support a non-standard value here
-              labels: @labels,
-              creationThreadId: getThreadId())
-    result.lock.initLock()
-
 proc `$`*(collector: type IgnoredCollector): string = ""
 
 # for testing
 template value*(collector: Collector | type IgnoredCollector, labelValues: LabelsParam = @[]): float64 =
+  var res: float64
   when defined(metrics) and collector is not IgnoredCollector:
-    {.gcsafe.}:
-      collector.metrics[@labelValues][0].value
+    # Don't access the "metrics" field directly, so we can support custom
+    # collectors.
+    withLock collector.lock:
+      res = collector.collect()[@labelValues][0].value
   else:
-    0.0
+    res = 0.0
+  res
 
 # for testing
 proc valueByName*(collector: Collector | type IgnoredCollector,
@@ -223,9 +216,10 @@ proc valueByName*(collector: Collector | type IgnoredCollector,
                   extraLabelValues: LabelsParam = @[]): float64 {.raises: [Defect, ValueError].} =
   when defined(metrics) and collector is not IgnoredCollector:
     let allLabelValues = @labelValues & @extraLabelValues
-    for metric in collector.metrics[@labelValues]:
-      if metric.name == metricName and metric.labelValues == allLabelValues:
-        return metric.value
+    withLock collector.lock:
+      for metric in collector.collect()[@labelValues]:
+        if metric.name == metricName and metric.labelValues == allLabelValues:
+          return metric.value
     raise newException(KeyError, "No such metric name for this collector: '" & metricName & "' (label values = " & $allLabelValues & ").")
 
 ############
@@ -279,6 +273,28 @@ proc toText*(registry: Registry, showTimestamp = true): string =
 
 proc `$`*(registry: Registry): string =
   registry.toText()
+
+#####################
+# custom collectors #
+#####################
+
+when defined(metrics):
+  # Used for custom collectors, to shield the API user from having to deal with
+  # internal details like lock initialisation.
+  proc buildCollector* [T] (typ: typedesc[T],
+                            name: string,
+                            help: string,
+                            labels: LabelsParam = @[],
+                            registry = defaultRegistry): T {.raises: [Defect, ValueError, RegistrationError].} =
+    validateName(name)
+    validateLabels(labels)
+    result = T(name: name,
+              help: help,
+              typ: "gauge", # Prometheus does not support a non-standard value here
+              labels: @labels,
+              creationThreadId: getThreadId())
+    result.lock.initLock()
+    result.register(registry)
 
 #######################################
 # export metrics to StatsD and Carbon #
@@ -1083,8 +1099,6 @@ when defined(metrics) and defined(linux):
     except CatchableError as e:
       printError(e.msg)
 
-  processInfo.register(defaultRegistry)
-
 ####################
 # Nim runtime info #
 ####################
@@ -1143,8 +1157,6 @@ when defined(metrics):
         )
     except CatchableError as e:
       printError(e.msg)
-
-  nimRuntimeInfo.register(defaultRegistry)
 
   declareGauge nim_gc_mem_bytes, "the number of bytes that are owned by a thread's GC", ["thread_id"]
   declareGauge nim_gc_mem_occupied_bytes, "the number of bytes that are owned by a thread's GC and hold data", ["thread_id"]
