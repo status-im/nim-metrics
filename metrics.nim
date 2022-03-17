@@ -273,6 +273,7 @@ proc collect*(registry: Registry): OrderedTable[Collector, Metrics] =
         var collectorCopy: Collector
         withLock collector.lock:
           deepCopy(collectorCopy, collector)
+        collectorCopy.lock.initLock()
         result[collectorCopy] = collectorCopy.collect()
 
 proc toText*(registry: Registry, showTimestamp = true): string =
