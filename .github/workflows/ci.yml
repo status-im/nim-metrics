@@ -92,7 +92,7 @@ jobs:
         uses: actions/cache@v2
         with:
           path: external/dlls-${{ matrix.target.cpu }}
-          key: 'dlls-${{ matrix.target.cpu }}'
+          key: 'dlls-${{ matrix.target.cpu }}-v2'
 
       - name: Install DLLs dependencies (Windows)
         if: >
