@@ -20,6 +20,7 @@ import locks, net, os, sets, tables, times
 when defined(metrics):
   import algorithm, hashes, random, sequtils, strutils,
     metrics/common
+  export tables # for custom collectors that need to work with the "Metrics" type
   when defined(posix):
     import posix
 
@@ -210,11 +211,15 @@ proc `$`*(collector: type IgnoredCollector): string = ""
 
 # for testing
 template value*(collector: Collector | type IgnoredCollector, labelValues: LabelsParam = @[]): float64 =
+  var res: float64
   when defined(metrics) and collector is not IgnoredCollector:
-    {.gcsafe.}:
-      collector.metrics[@labelValues][0].value
+    # Don't access the "metrics" field directly, so we can support custom
+    # collectors.
+    withLock collector.lock:
+      res = collector.collect()[@labelValues][0].value
   else:
-    0.0
+    res = 0.0
+  res
 
 # for testing
 proc valueByName*(collector: Collector | type IgnoredCollector,
@@ -223,9 +228,10 @@ proc valueByName*(collector: Collector | type IgnoredCollector,
                   extraLabelValues: LabelsParam = @[]): float64 {.raises: [Defect, ValueError].} =
   when defined(metrics) and collector is not IgnoredCollector:
     let allLabelValues = @labelValues & @extraLabelValues
-    for metric in collector.metrics[@labelValues]:
-      if metric.name == metricName and metric.labelValues == allLabelValues:
-        return metric.value
+    withLock collector.lock:
+      for metric in collector.collect()[@labelValues]:
+        if metric.name == metricName and metric.labelValues == allLabelValues:
+          return metric.value
     raise newException(KeyError, "No such metric name for this collector: '" & metricName & "' (label values = " & $allLabelValues & ").")
 
 ############
@@ -267,6 +273,7 @@ proc collect*(registry: Registry): OrderedTable[Collector, Metrics] =
         var collectorCopy: Collector
         withLock collector.lock:
           deepCopy(collectorCopy, collector)
+        collectorCopy.lock.initLock()
         result[collectorCopy] = collectorCopy.collect()
 
 proc toText*(registry: Registry, showTimestamp = true): string =
@@ -279,6 +286,28 @@ proc toText*(registry: Registry, showTimestamp = true): string =
 
 proc `$`*(registry: Registry): string =
   registry.toText()
+
+#####################
+# custom collectors #
+#####################
+
+when defined(metrics):
+  # Used for custom collectors, to shield the API user from having to deal with
+  # internal details like lock initialisation.
+  # Also used internally, for creating standard collectors, to avoid code
+  # duplication.
+  proc newCollector* [T] (typ: typedesc[T], name: string, help: string, labels: LabelsParam = @[],
+                          registry = defaultRegistry, standardType = "gauge"): T
+                          {.raises: [Defect, ValueError, RegistrationError].} =
+    validateName(name)
+    validateLabels(labels)
+    result = T(name: name,
+              help: help,
+              typ: standardType, # Prometheus does not support a non-standard value here
+              labels: @labels,
+              creationThreadId: getThreadId())
+    result.lock.initLock()
+    result.register(registry)
 
 #######################################
 # export metrics to StatsD and Carbon #
@@ -488,19 +517,13 @@ when defined(metrics):
 
   # don't document this one, even if we're forced to make it public, because it
   # won't work when all (or some) collectors are disabled
-  proc newCounter*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry, sampleRate = 1.float): Counter  {.raises: [Defect, ValueError, RegistrationError].} =
-    validateName(name)
-    validateLabels(labels)
-    result = Counter(name: name,
-                    help: help,
-                    typ: "counter",
-                    labels: @labels,
-                    creationThreadId: getThreadId(),
-                    sampleRate: sampleRate)
-    result.lock.initLock()
+  proc newCounter*(name: string, help: string, labels: LabelsParam = @[],
+                  registry = defaultRegistry, sampleRate = 1.float): Counter
+                  {.raises: [Defect, ValueError, RegistrationError].} =
+    result = Counter.newCollector(name, help, labels, registry, "counter")
+    result.sampleRate = sampleRate
     if labels.len == 0:
       result.metrics[@labels] = newCounterMetrics(name, labels, labels)
-    result.register(registry)
 
 template declareCounter*(identifier: untyped,
                         help: static string,
@@ -615,18 +638,12 @@ when defined(metrics):
     if result notin gauge.metrics:
       gauge.metrics[result] = newGaugeMetrics(gauge.name, gauge.labels, result)
 
-  proc newGauge*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry): Gauge {.raises: [Defect, ValueError, RegistrationError].} =
-    validateName(name)
-    validateLabels(labels)
-    result = Gauge(name: name,
-                  help: help,
-                  typ: "gauge",
-                  labels: @labels,
-                  creationThreadId: getThreadId())
-    result.lock.initLock()
+  proc newGauge*(name: string, help: string, labels: LabelsParam = @[],
+                registry = defaultRegistry): Gauge
+                {.raises: [Defect, ValueError, RegistrationError].} =
+    result = Gauge.newCollector(name, help, labels, registry, "gauge")
     if labels.len == 0:
       result.metrics[@labels] = newGaugeMetrics(name, labels, labels)
-    result.register(registry)
 
 template declareGauge*(identifier: untyped,
                       help: static string,
@@ -769,18 +786,13 @@ when defined(metrics):
     if result notin summary.metrics:
       summary.metrics[result] = newSummaryMetrics(summary.name, summary.labels, result)
 
-  proc newSummary*(name: string, help: string, labels: LabelsParam = @[], registry = defaultRegistry): Summary {.raises: [Defect, ValueError, RegistrationError].} =
-    validateName(name)
+  proc newSummary*(name: string, help: string, labels: LabelsParam = @[],
+                  registry = defaultRegistry): Summary
+                  {.raises: [Defect, ValueError, RegistrationError].} =
     validateLabels(labels, invalidLabelNames = ["quantile"])
-    result = Summary(name: name,
-                    help: help,
-                    typ: "summary",
-                    labels: @labels,
-                    creationThreadId: getThreadId())
-    result.lock.initLock()
+    result = Summary.newCollector(name, help, labels, registry, "summary")
     if labels.len == 0:
       result.metrics[@labels] = newSummaryMetrics(name, labels, labels)
-    result.register(registry)
 
 template declareSummary*(identifier: untyped,
                         help: static string,
@@ -873,12 +885,9 @@ when defined(metrics):
     if result notin histogram.metrics:
       histogram.metrics[result] = newHistogramMetrics(histogram.name, histogram.labels, result, histogram.buckets)
 
-  proc newHistogram*(name: string,
-                    help: string,
-                    labels: LabelsParam = @[],
-                    registry = defaultRegistry,
-                    buckets: openArray[float64] = defaultHistogramBuckets): Histogram {.raises: [Defect, ValueError, RegistrationError].} =
-    validateName(name)
+  proc newHistogram*(name: string, help: string, labels: LabelsParam = @[],
+                    registry = defaultRegistry, buckets: openArray[float64] = defaultHistogramBuckets): Histogram
+                    {.raises: [Defect, ValueError, RegistrationError].} =
     validateLabels(labels, invalidLabelNames = ["le"])
     var bucketsSeq = @buckets
     if bucketsSeq.len > 0 and bucketsSeq[^1] != Inf:
@@ -887,16 +896,10 @@ when defined(metrics):
       raise newException(ValueError, "Invalid buckets list: '" & $bucketsSeq & "'. At least 2 required.")
     if not bucketsSeq.isSorted(system.cmp[float64]):
       raise newException(ValueError, "Invalid buckets list: '" & $bucketsSeq & "'. Must be sorted.")
-    result = Histogram(name: name,
-                    help: help,
-                    typ: "histogram",
-                    labels: @labels,
-                    creationThreadId: getThreadId(),
-                    buckets: bucketsSeq)
-    result.lock.initLock()
+    result = Histogram.newCollector(name, help, labels, registry, "histogram")
+    result.buckets = bucketsSeq
     if labels.len == 0:
       result.metrics[@labels] = newHistogramMetrics(name, labels, labels, bucketsSeq)
-    result.register(registry)
 
 template declareHistogram*(identifier: untyped,
                         help: static string,
@@ -1023,7 +1026,7 @@ when defined(metrics) and defined(linux):
     pagesize = sysconf(SC_PAGE_SIZE).float64
 
   type ProcessInfo = ref object of Gauge
-  var processInfo* {.global.} = ProcessInfo.buildCollector("process_info", "CPU and memory usage")
+  var processInfo* {.global.} = ProcessInfo.newCollector("process_info", "CPU and memory usage")
 
   method collect*(collector: ProcessInfo): Metrics =
     let timestamp = getTime().toMilliseconds()
@@ -1083,15 +1086,13 @@ when defined(metrics) and defined(linux):
     except CatchableError as e:
       printError(e.msg)
 
-  processInfo.register(defaultRegistry)
-
 ####################
 # Nim runtime info #
 ####################
 
 when defined(metrics):
   type NimRuntimeInfo = ref object of Gauge
-  var nimRuntimeInfo* {.global.} = NimRuntimeInfo.buildCollector("nim_runtime_info", "Nim runtime info")
+  var nimRuntimeInfo* {.global.} = NimRuntimeInfo.newCollector("nim_runtime_info", "Nim runtime info")
 
   method collect*(collector: NimRuntimeInfo): Metrics =
     let timestamp = getTime().toMilliseconds()
@@ -1143,8 +1144,6 @@ when defined(metrics):
         )
     except CatchableError as e:
       printError(e.msg)
-
-  nimRuntimeInfo.register(defaultRegistry)
 
   declareGauge nim_gc_mem_bytes, "the number of bytes that are owned by a thread's GC", ["thread_id"]
   declareGauge nim_gc_mem_occupied_bytes, "the number of bytes that are owned by a thread's GC and hold data", ["thread_id"]

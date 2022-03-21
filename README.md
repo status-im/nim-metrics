@@ -186,6 +186,41 @@ myHistogram.time:
 histogram("one_off_histogram").observe(10)
 ```
 
+### Custom collectors
+
+Sometimes you need to create metrics on the fly, with a custom `collect()`
+method of a custom collector type.
+
+Let's say you have an USB-attached power meter and, for some reason, you want
+to read the power consumption every time Prometheus reads your metrics:
+
+```nim
+import metrics, times
+
+when defined(metrics):
+  type PowerCollector = ref object of Gauge
+  var powerCollector = PowerCollector.newCollector(name = "power_usage", help = "Instantaneous power usage - in watts.")
+
+  method collect(collector: PowerCollector): Metrics =
+    let timestamp = getTime().toMilliseconds()
+    result[@[]] = @[
+      Metric(
+        name: "power_usage",
+        value: getPowerUsage(), # your power-meter reader
+        timestamp: timestamp,
+      )
+    ]
+```
+
+There's a bit of repetition in the collector and metric names, because we no
+longer have behind-the-scenes name copying/deriving there.
+
+You can output multiple metrics from your custom `collect()` method. It's
+perfectly legal and we do that internally for our system/runtime metrics.
+
+Try not to get creative with dynamic metric names - Prometheus has a hard time
+dealing with that.
+
 ## Labels
 
 Metric labels are supported for the Prometheus backend, as a way to add extra

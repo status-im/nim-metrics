@@ -91,8 +91,8 @@ jobs:
         id: windows-dlls-cache
         uses: actions/cache@v2
         with:
-          path: external/dlls-${{ matrix.target.cpu }}
-          key: 'dlls-${{ matrix.target.cpu }}'
+          path: external/dlls
+          key: 'dlls-v3'
 
       - name: Install DLLs dependencies (Windows)
         if: >

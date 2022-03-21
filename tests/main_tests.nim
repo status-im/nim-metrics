@@ -1,4 +1,4 @@
-# Copyright (c) 2019 Status Research & Development GmbH
+# Copyright (c) 2019-2022 Status Research & Development GmbH
 # Licensed and distributed under either of
 #   * MIT license: http://opensource.org/licenses/MIT
 #   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
@@ -338,6 +338,33 @@ suite "registry":
     expect RegistrationError:
       declareCounter duplicate_counter, "duplicate counter"
       duplicate_counter.inc()
+
+when defined(metrics):
+  type MyCustomCollector = ref object of Gauge
+  var
+    myCustomCollector = MyCustomCollector.newCollector("my_custom_collector", "help")
+    registry2 = newRegistry()
+    myCustomCollector2 = MyCustomCollector.newCollector("my_custom_collector2", "help2", registry = registry2)
+
+  method collect(collector: MyCustomCollector): Metrics =
+    let timestamp = getTime().toMilliseconds()
+    result[@[]] = @[
+      Metric(
+        name: "custom_metric",
+        value: 42,
+        timestamp: timestamp,
+      )
+    ]
+
+  suite "custom collectors":
+    test "42":
+      check myCustomCollector.value == 42
+
+    test "custom registry":
+      let collectors = registry2.collect()
+      check collectors.len == 1
+      for collector, metrics in collectors:
+        check collector.value == 42
 
 suite "system metrics":
   test "change update interval":
