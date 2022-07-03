@@ -11,11 +11,33 @@
 when defined(nimHasUsed):
   {.used.}
 
+import stew/results
+import chronos
+export chronos, results
+
+type
+  MetricsError* = object of CatchableError
+
+  MetricsHttpServerStatus* {.pure.} = enum
+    Closed, Running, Stopped
+
+  MetricsServerData = object
+    when defined(metrics):
+      address: TransportAddress
+      requestPipe: tuple[read: AsyncFD, write: AsyncFD]
+      responsePipe: tuple[read: AsyncFD, write: AsyncFD]
+
+  MetricsHttpServerRef* = ref object
+    when defined(metrics):
+      data: MetricsServerData
+      thread: Thread[MetricsServerData]
+      reqTransp: StreamTransport
+      respTransp: StreamTransport
+
 when defined(metrics):
   import std/os
-  import stew/results, chronos, chronos/apps/http/httpserver
+  import chronos/apps/http/httpserver
   import ../metrics, ./common
-  export results
 
   var httpServerThread: Thread[TransportAddress]
 
@@ -55,22 +77,6 @@ when defined(metrics):
         sleep(1000)
 
   type
-    MetricsError* = object of CatchableError
-
-    MetricsHttpServerStatus* {.pure.} = enum
-      Closed, Running, Stopped
-
-    MetricsServerData = object
-      address: TransportAddress
-      requestPipe: tuple[read: AsyncFD, write: AsyncFD]
-      responsePipe: tuple[read: AsyncFD, write: AsyncFD]
-
-    MetricsHttpServerRef* = ref object
-      data: MetricsServerData
-      thread: Thread[MetricsServerData]
-      reqTransp: StreamTransport
-      respTransp: StreamTransport
-
     MetricsRequest {.pure.} = enum
       Status, Start, Stop, Close
 
@@ -282,7 +288,7 @@ proc startMetricsHttpServer*(address = "127.0.0.1", port = Port(8000)) {.
     httpServerThread.createThread(serveHttp, initTAddress(address, port))
 
 proc new*(t: typedesc[MetricsHttpServerRef], address: string,
-           port: Port): Result[MetricsHttpServerRef, cstring] {.
+          port: Port): Result[MetricsHttpServerRef, cstring] {.
      raises: [Defect].} =
   ## Initialize new instance of MetricsHttpServerRef.
   ##

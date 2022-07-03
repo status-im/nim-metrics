@@ -28,7 +28,10 @@ suite "Chronos metrics HTTP server test suite":
       block:
         let status = await server.status()
         check status == MetricsHttpServerStatus.Closed
-    waitFor test()
+    when defined(metrics):
+      waitFor test()
+    else:
+      check MetricsHttpServerRef.new("127.0.0.1", Port(8080)).isErr() == true
   test "new()/start()/stop()/close() test":
     proc test() {.async.} =
       let server = MetricsHttpServerRef.new("127.0.0.1", Port(8080)).get()
@@ -47,7 +50,10 @@ suite "Chronos metrics HTTP server test suite":
       block:
         let status = await server.status()
         check status == MetricsHttpServerStatus.Closed
-    waitFor test()
+    when defined(metrics):
+      waitFor test()
+    else:
+      check MetricsHttpServerRef.new("127.0.0.1", Port(8080)).isErr() == true
   test "new()/start()/response/stop()/start()/response/stop()/close() test":
     proc test() {.async.} =
       let server = MetricsHttpServerRef.new("127.0.0.1", Port(8080)).get()
@@ -84,7 +90,10 @@ suite "Chronos metrics HTTP server test suite":
       block:
         let status = await server.status()
         check status == MetricsHttpServerStatus.Closed
-    waitFor test()
+    when defined(metrics):
+      waitFor test()
+    else:
+      check MetricsHttpServerRef.new("127.0.0.1", Port(8080)).isErr() == true
   test "new()/start()/close() test":
     proc test() {.async.} =
       let server = MetricsHttpServerRef.new("127.0.0.1", Port(8080)).get()
@@ -99,7 +108,10 @@ suite "Chronos metrics HTTP server test suite":
       block:
         let status = await server.status()
         check status == MetricsHttpServerStatus.Closed
-    waitFor test()
+    when defined(metrics):
+      waitFor test()
+    else:
+      check MetricsHttpServerRef.new("127.0.0.1", Port(8080)).isErr() == true
   test "HTTP 200/responses check test":
     proc test() {.async.} =
       let server = MetricsHttpServerRef.new("127.0.0.1", Port(8080)).get()
@@ -129,7 +141,10 @@ suite "Chronos metrics HTTP server test suite":
       block:
         let status = await server.status()
         check status == MetricsHttpServerStatus.Closed
-    waitFor test()
+    when defined(metrics):
+      waitFor test()
+    else:
+      check MetricsHttpServerRef.new("127.0.0.1", Port(8080)).isErr() == true
   test "HTTP 404/response check test":
     proc test() {.async.} =
       let server = MetricsHttpServerRef.new("127.0.0.1", Port(8080)).get()
@@ -155,4 +170,7 @@ suite "Chronos metrics HTTP server test suite":
       block:
         let status = await server.status()
         check status == MetricsHttpServerStatus.Closed
-    waitFor test()
+    when defined(metrics):
+      waitFor test()
+    else:
+      check MetricsHttpServerRef.new("127.0.0.1", Port(8080)).isErr() == true
