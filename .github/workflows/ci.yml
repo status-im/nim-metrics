@@ -157,6 +157,3 @@ jobs:
           nimble install -y chronicles
           nimble test
           nimble test_chronicles
-          export TEST_LANG=cpp
-          nimble test
-          nimble test_chronicles
