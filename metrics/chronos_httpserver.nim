@@ -78,13 +78,18 @@ when defined(metrics):
         printError(e.msg)
         sleep(1000)
 
+  const
+    ResponseOk = 0'u8
+    ResponseError = 1'u8
+    MessageSize = 255
+
   type
     MetricsRequest {.pure.} = enum
       Status, Start, Stop, Close
 
     MetricsResponse = object
       status: byte
-      data: array[255, byte]
+      data: array[MessageSize, byte]
 
     MetricsThreadData = object
       reqTransp: StreamTransport
@@ -93,10 +98,6 @@ when defined(metrics):
 
     MetricsErrorKind {.pure.} = enum
       Timeout, Transport, Communication
-
-  const
-    ResponseOk = 0'u8
-    ResponseError = 1'u8
 
   proc raiseMetricsError(msg: string, exc: ref Exception) {.
        noreturn, noinit, raises: [MetricsError].} =
@@ -124,33 +125,31 @@ when defined(metrics):
     raise (ref MetricsError)(msg: message)
 
   proc respond(m: MetricsThreadData, mtype: byte, message: string) {.async.} =
-    var buffer: array[256, byte]
+    var buffer: array[MessageSize + 1, byte]
     let length = min(len(message), len(buffer) - 1)
     zeroMem(cast[pointer](addr buffer[0]), len(buffer))
     buffer[0] = mtype
     if length > 0:
-      copyMem(cast[pointer](addr buffer[1]), unsafeAddr message[0], length)
-    let res = await m.respTransp.write(cast[pointer](addr buffer[0]),
-                                       len(buffer))
+      copyMem(addr buffer[1], unsafeAddr message[0], length)
+    let res = await m.respTransp.write(addr buffer[0], len(buffer))
     if res != len(buffer):
       raiseMetricsError("Incomplete response has been sent")
 
   proc communicate(m: MetricsHttpServerRef,
                    req: MetricsRequest): Future[MetricsResponse] {.async.} =
-    var buffer: array[256, byte]
-    buffer[0] = cast[byte](req)
+    var buffer: array[MessageSize + 1, byte]
+    buffer[0] = byte(req)
     block:
-      let res = await m.reqTransp.write(cast[pointer](addr buffer[0]), 1)
+      let res = await m.reqTransp.write(addr buffer[0], 1)
       if res != 1:
         raiseMetricsError("Incomplete request has been sent")
-    await m.respTransp.readExactly(cast[pointer](addr buffer[0]), len(buffer))
+    await m.respTransp.readExactly(addr buffer[0], len(buffer))
     var res = MetricsResponse(status: buffer[0])
-    copyMem(cast[pointer](addr res.data[0]),
-            cast[pointer](addr buffer[1]), len(buffer) - 1)
+    copyMem(addr res.data[0], addr buffer[1], sizeof(res.data))
     return res
 
   proc getMessage(m: MetricsResponse): string =
-    var res = newStringOfCap(256)
+    var res = newStringOfCap(MessageSize + 1)
     for i in 0 ..< len(m.data):
       let ch = m.data[i]
       if ch == 0x00'u8:
