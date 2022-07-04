@@ -8,6 +8,8 @@
 # HTTP server (for Prometheus) #
 ################################
 
+{.push raises: [Defect].}
+
 when defined(nimHasUsed):
   {.used.}
 
