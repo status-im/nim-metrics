@@ -305,12 +305,18 @@ proc new*(t: typedesc[MetricsHttpServerRef], address: string,
           initTAddress(address, port)
         except TransportAddressError as exc:
           return err("Invalid server address")
+    var
       request =
         block:
           let res = createAsyncPipe()
           if (res.read == asyncInvalidPipe) or (res.write == asyncInvalidPipe):
             return err("Unable to create communication request pipe")
           res
+      cleanupRequest = true
+    defer:
+      if cleanupRequest: request.closePipe()
+
+    var
       response =
         block:
           let res = createAsyncPipe()
@@ -318,36 +324,35 @@ proc new*(t: typedesc[MetricsHttpServerRef], address: string,
             request.closePipe()
             return err("Unable to create communication response pipe")
           res
-      data = MetricsServerData(address: taddress, requestPipe: request,
+      cleanupResponse = true
+    defer:
+      if cleanupResponse: response.closePipe()
+
+    let data = MetricsServerData(address: taddress, requestPipe: request,
                                responsePipe: response)
     var server = MetricsHttpServerRef(data: data)
     try:
       createThread(server.thread, serveMetricsServer, data)
     except Exception as exc:
-      request.closePipe()
-      response.closePipe()
       return err("Unexpected error while spawning metrics server's thread")
     except ResourceExhaustedError as exc:
-      request.closePipe()
-      response.closePipe()
       return err("Unable to spawn metrics server's thread")
 
     server.reqTransp =
       try:
         fromPipe(request.write)
       except CatchableError as exc:
-        request.closePipe()
-        response.closePipe()
         return err("Unable to establish communication channel with " &
                    "metrics server thread")
     server.respTransp =
       try:
         fromPipe(response.read)
       except CatchableError as exc:
-        request.closePipe()
-        response.closePipe()
         return err("Unable to establish communication channel with " &
                    "metrics server thread")
+
+    cleanupRequest = false
+    cleanupResponse = false
     ok(server)
   else:
     err("Could not initialize metrics server, because metrics are disabled")
