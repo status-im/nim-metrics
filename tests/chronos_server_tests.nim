@@ -1,4 +1,4 @@
-# Copyright (c) 2021 Status Research & Development GmbH
+# Copyright (c) 2021-2022 Status Research & Development GmbH
 # Licensed and distributed under either of
 #   * MIT license: http://opensource.org/licenses/MIT
 #   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
@@ -65,7 +65,7 @@ suite "Chronos metrics HTTP server test suite":
         let status = await server.status()
         check status == MetricsHttpServerStatus.Running
       block:
-        let resp = await httpclient("http://127.0.0.1:8080/health")
+        let resp = await httpClient("http://127.0.0.1:8080/health")
         check:
           resp.status == 200
           resp.data.bytesToString == "OK"
@@ -78,7 +78,7 @@ suite "Chronos metrics HTTP server test suite":
         let status = await server.status()
         check status == MetricsHttpServerStatus.Running
       block:
-        let resp = await httpclient("http://127.0.0.1:8080/health")
+        let resp = await httpClient("http://127.0.0.1:8080/health")
         check:
           resp.status == 200
           resp.data.bytesToString == "OK"
@@ -123,13 +123,13 @@ suite "Chronos metrics HTTP server test suite":
         let status = await server.status()
         check status == MetricsHttpServerStatus.Running
       block:
-        let resp = await httpclient("http://127.0.0.1:8080/metrics")
+        let resp = await httpClient("http://127.0.0.1:8080/metrics")
         check:
           resp.status == 200
           len(resp.data) > 0
 
       block:
-        let resp = await httpclient("http://127.0.0.1:8080/health")
+        let resp = await httpClient("http://127.0.0.1:8080/health")
         check:
           resp.status == 200
           resp.data.bytesToString() == "OK"
@@ -157,7 +157,7 @@ suite "Chronos metrics HTTP server test suite":
         check status == MetricsHttpServerStatus.Running
 
       block:
-        let resp = await httpclient("http://127.0.0.1:8080/somePath")
+        let resp = await httpClient("http://127.0.0.1:8080/somePath")
         check:
           resp.status == 404
           len(resp.data) > 0

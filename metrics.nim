@@ -72,10 +72,10 @@ when defined(metrics):
     return convert(Seconds, Milliseconds, time.toUnix()) + convert(Nanoseconds, Milliseconds, time.nanosecond())
 
   template processHelp*(help: string): string =
-    help.multireplace([("\\", "\\\\"), ("\n", "\\n")])
+    help.multiReplace([("\\", "\\\\"), ("\n", "\\n")])
 
   template processLabelValue*(labelValue: string): string =
-    labelValue.multireplace([("\\", "\\\\"), ("\n", "\\n"), ("\"", "\\\"")])
+    labelValue.multiReplace([("\\", "\\\\"), ("\n", "\\n"), ("\"", "\\\"")])
 
   proc toText*(metric: Metric, showTimestamp = true): string =
     result = metric.name
@@ -1023,7 +1023,7 @@ when defined(metrics) and defined(linux):
       # /proc not mounted?
       discard
     ticks = sysconf(SC_CLK_TCK).float64
-    pagesize = sysconf(SC_PAGE_SIZE).float64
+    pagesize = sysconf(SC_PAGESIZE).float64
 
   type ProcessInfo = ref object of Gauge
   var processInfo* {.global.} = ProcessInfo.newCollector("process_info", "CPU and memory usage")
@@ -1070,7 +1070,7 @@ when defined(metrics) and defined(linux):
           result[@[]].add(
             Metric(
               name: "process_max_fds", # Maximum number of open file descriptors.
-              value: line.splitWhiteSpace()[3].parseFloat(), # a simple `split()` does not combine adjacent whitespace
+              value: line.splitWhitespace()[3].parseFloat(), # a simple `split()` does not combine adjacent whitespace
               timestamp: timestamp,
             )
           )
