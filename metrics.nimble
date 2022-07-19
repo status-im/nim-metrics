@@ -20,7 +20,19 @@ proc buildBinary(name: string, srcDir = "./", params = "") =
     # we're under Nim, not Nimble
     for i in 2..<paramCount():
       extra_params &= " " & paramStr(i)
-  exec "nim " & getEnv("TEST_LANG", "c") & " " & getEnv("NIMFLAGS") & " --out:./build/" & name & " -f --skipParentCfg --hints:off " & extra_params & " " & srcDir & name & ".nim"
+
+  # Until Nim 1.6, lib/pure/stats.nim used `openarray`, e.g., from Nim 1.4:
+  # https://github.com/nim-lang/Nim/blob/30ba13d22af5eacc20b580cf80882817020de486/lib/pure/stats.nim#L280
+  let styleCheckStyle =
+    if (NimMajor, NimMinor) < (1, 6):
+      "hint"
+    else:
+      "error"
+
+  exec "nim " & getEnv("TEST_LANG", "c") & " " & getEnv("NIMFLAGS") &
+       " --out:./build/" & name & " -f --skipParentCfg --hints:off " &
+       "--styleCheck:usages --styleCheck:" & styleCheckStyle & " " &
+       extra_params & " " & srcDir & name & ".nim"
 
 ### tasks
 task test, "Main tests":
