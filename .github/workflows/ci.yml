@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency: # Cancel stale PR builds (but not push builds)
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   build:
     strategy:
@@ -28,7 +32,7 @@ jobs:
             shell: bash
           - target:
               os: macos
-            builder: macos-10.15
+            builder: macos-12
             shell: bash
           - target:
               os: windows
@@ -41,16 +45,17 @@ jobs:
 
     name: '${{ matrix.target.os }}-${{ matrix.target.cpu }} (Nim ${{ matrix.branch }})'
     runs-on: ${{ matrix.builder }}
+    continue-on-error: ${{ matrix.branch == 'devel' }}
     steps:
-      - name: Git checkout
-        uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v3
 
       - name: Install build dependencies (Linux i386)
         if: runner.os == 'Linux' && matrix.target.cpu == 'i386'
         run: |
           sudo dpkg --add-architecture i386
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND='noninteractive' apt-get install \
+          sudo apt-fast update -qq
+          sudo DEBIAN_FRONTEND='noninteractive' apt-fast install \
             --no-install-recommends -yq gcc-multilib g++-multilib \
             libssl-dev:i386 libpcre3-dev:i386
           mkdir -p external/bin
@@ -63,7 +68,7 @@ jobs:
           exec $(which g++) -m32 -mno-adx "\$@"
           EOF
           chmod 755 external/bin/gcc external/bin/g++
-          echo "${{ github.workspace }}/external/bin" >> $GITHUB_PATH
+          echo '${{ github.workspace }}/external/bin' >> $GITHUB_PATH
 
       - name: MSYS2 (Windows i386)
         if: runner.os == 'Windows' && matrix.target.cpu == 'i386'
@@ -91,8 +96,8 @@ jobs:
         id: windows-dlls-cache
         uses: actions/cache@v2
         with:
-          path: external/dlls
-          key: 'dlls-v3'
+          path: external/dlls-${{ matrix.target.cpu }}
+          key: 'dlls-${{ matrix.target.cpu }}'
 
       - name: Install DLLs dependencies (Windows)
         if: >
@@ -101,13 +106,13 @@ jobs:
         run: |
           mkdir -p external
           curl -L "https://nim-lang.org/download/windeps.zip" -o external/windeps.zip
-          7z x -y external/windeps.zip -oexternal/dlls
+          7z x -y external/windeps.zip -oexternal/dlls-${{ matrix.target.cpu }}
 
       - name: Path to cached dependencies (Windows)
         if: >
           runner.os == 'Windows'
         run: |
-          echo "${{ github.workspace }}/external/dlls" >> $GITHUB_PATH
+          echo "${{ github.workspace }}/external/dlls-${{ matrix.target.cpu }}" >> $GITHUB_PATH
 
       - name: Derive environment variables
         run: |
@@ -149,7 +154,6 @@ jobs:
           nim --version
           nimble --version
           nimble install -y --depsOnly
-          nimble develop
           nimble install -y chronicles
           nimble test
           nimble test_chronicles
