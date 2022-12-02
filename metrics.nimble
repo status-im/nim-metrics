@@ -11,46 +11,42 @@ skipDirs      = @["tests", "benchmarks"]
 requires "nim >= 1.2.0",
          "chronos >= 2.6.0"
 
-### Helper functions
-proc buildBinary(name: string, srcDir = "./", params = "") =
-  if not dirExists "build":
-    mkDir "build"
-  var extra_params = params
-  if paramStr(1) != "e":
-    # we're under Nim, not Nimble
-    for i in 2..<paramCount():
-      extra_params &= " " & paramStr(i)
+let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
+let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
+let flags = getEnv("NIMFLAGS", "") # Extra flags for the compiler
+let verbose = getEnv("V", "") notin ["", "0"]
 
-  # Until Nim 1.6, lib/pure/stats.nim used `openarray`, e.g., from Nim 1.4:
-  # https://github.com/nim-lang/Nim/blob/30ba13d22af5eacc20b580cf80882817020de486/lib/pure/stats.nim#L280
-  let styleCheckStyle =
-    if (NimMajor, NimMinor) < (1, 6):
-      "hint"
-    else:
-      "error"
+let styleCheckStyle = if (NimMajor, NimMinor) < (1, 6): "hint" else: "error"
+let cfg =
+  " --styleCheck:usages --styleCheck:" & styleCheckStyle &
+  (if verbose: "" else: " --verbosity:0 --hints:off") &
+  " --skipParentCfg --skipUserCfg --outdir:build --nimcache:build/nimcache -f"
 
-  exec "nim " & getEnv("TEST_LANG", "c") & " " & getEnv("NIMFLAGS") &
-       " --out:./build/" & name & " -f --skipParentCfg --hints:off " &
-       "--styleCheck:usages --styleCheck:" & styleCheckStyle & " " &
-       extra_params & " " & srcDir & name & ".nim"
+proc build(args, path: string) =
+  exec nimc & " " & lang & " " & cfg & " " & flags & " " & args & " " & path
+
+proc run(args, path: string) =
+  build args & " -r", path
 
 ### tasks
 task test, "Main tests":
   # build it with metrics disabled, first
-  buildBinary "main_tests", "tests/"
-  buildBinary "main_tests", "tests/", "--threads:on"
-  buildBinary "main_tests", "tests/", "-r -d:metrics --threads:on"
-  buildBinary "bench_collectors", "benchmarks/"
-  buildBinary "bench_collectors", "benchmarks/", "-r -d:metrics --threads:on"
-  buildBinary "stdlib_server_tests", "tests/", "-r"
-  buildBinary "stdlib_server_tests", "tests/", "-r -d:metrics --threads:on"
-  buildBinary "chronos_server_tests", "tests/", "-r"
-  buildBinary "chronos_server_tests", "tests/", "-r -d:metrics --threads:on"
+  build "", "tests/main_tests"
+  build "--threads:on", "tests/main_tests"
+  run "-d:metrics --threads:on", "tests/main_tests"
+
+  build "", "benchmarks/bench_collectors"
+  run "-d:metrics --threads:on", "benchmarks/bench_collectors"
+
+  run "", "tests/stdlib_server_tests"
+  run "-d:metrics --threads:on", "tests/stdlib_server_tests"
+  run "", "tests/chronos_server_tests"
+  run "-d:metrics --threads:on", "tests/chronos_server_tests"
 
 task test_chronicles, "Chronicles tests":
-  buildBinary "chronicles_tests", "tests/"
-  buildBinary "chronicles_tests", "tests/", "-r -d:metrics --threads:on"
+  build "chronicles_tests", "tests/chronicles_tests"
+  run "-d:metrics --threads:on", "tests/chronicles_tests"
 
 task benchmark, "Run benchmarks":
-  buildBinary "bench_collectors", "benchmarks/", "-r -d:metrics --threads:on -d:release"
+  run "-d:metrics --threads:on -d:release", "benchmarks/bench_collectors"
 
