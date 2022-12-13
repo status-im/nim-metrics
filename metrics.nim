@@ -215,26 +215,31 @@ template value*(collector: Collector | type IgnoredCollector, labelValues: Label
   when defined(metrics) and collector is not IgnoredCollector:
     # Don't access the "metrics" field directly, so we can support custom
     # collectors.
-    withLock collector.lock:
-      {.gcsafe.}:
+    {.gcsafe.}:
+      withLock collector.lock:
         res = collector.collect()[@labelValues][0].value
   else:
     res = 0.0
   res
 
 # for testing
-proc valueByName*(collector: Collector | type IgnoredCollector,
+proc valueByNameInternal*(collector: Collector | type IgnoredCollector,
                   metricName: string,
                   labelValues: LabelsParam = @[],
                   extraLabelValues: LabelsParam = @[]): float64 {.raises: [Defect, ValueError].} =
   when defined(metrics) and collector is not IgnoredCollector:
     let allLabelValues = @labelValues & @extraLabelValues
     withLock collector.lock:
-      {.gcsafe.}:
-        for metric in collector.collect()[@labelValues]:
-          if metric.name == metricName and metric.labelValues == allLabelValues:
-            return metric.value
+      for metric in collector.collect()[@labelValues]:
+        if metric.name == metricName and metric.labelValues == allLabelValues:
+          return metric.value
     raise newException(KeyError, "No such metric name for this collector: '" & metricName & "' (label values = " & $allLabelValues & ").")
+
+template valueByName*(collector: Collector | type IgnoredCollector,
+                  metricName: string,
+                  labelValues: LabelsParam = @[],
+                  extraLabelValues: LabelsParam = @[]): float64 =
+  {.gcsafe.}: valueByNameInternal(collector, metricName, labelValues, extraLabelValues)
 
 ############
 # registry #
