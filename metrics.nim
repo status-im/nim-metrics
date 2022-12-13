@@ -216,7 +216,8 @@ template value*(collector: Collector | type IgnoredCollector, labelValues: Label
     # Don't access the "metrics" field directly, so we can support custom
     # collectors.
     withLock collector.lock:
-      res = collector.collect()[@labelValues][0].value
+      {.gcsafe.}:
+        res = collector.collect()[@labelValues][0].value
   else:
     res = 0.0
   res
@@ -229,9 +230,10 @@ proc valueByName*(collector: Collector | type IgnoredCollector,
   when defined(metrics) and collector is not IgnoredCollector:
     let allLabelValues = @labelValues & @extraLabelValues
     withLock collector.lock:
-      for metric in collector.collect()[@labelValues]:
-        if metric.name == metricName and metric.labelValues == allLabelValues:
-          return metric.value
+      {.gcsafe.}:
+        for metric in collector.collect()[@labelValues]:
+          if metric.name == metricName and metric.labelValues == allLabelValues:
+            return metric.value
     raise newException(KeyError, "No such metric name for this collector: '" & metricName & "' (label values = " & $allLabelValues & ").")
 
 ############
