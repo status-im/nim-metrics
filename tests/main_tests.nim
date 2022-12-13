@@ -34,6 +34,8 @@ proc gcSafetyTest* {.gcsafe.} = # The test is successful if this proc compiles
   globalGauge.set 10.0
   globalGauge.inc
   globalGauge.dec
+  discard globalCounter.value
+  discard globalCounter.valueByName("test")
   globalPublicGauge.set(1)
 
 suite "counter":
