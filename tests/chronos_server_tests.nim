@@ -4,9 +4,10 @@
 #   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import std/[uri, unittest]
+import std/[uri]
 import chronos, chronos/apps/http/httpclient
 import ../metrics, ../metrics/chronos_httpserver
+import unittest2
 
 suite "Chronos metrics HTTP server test suite":
 

@@ -4,7 +4,7 @@
 #   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0)
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import chronicles, unittest,
+import chronicles, unittest2,
       ../metrics, ../metrics/chronicles_support
 
 when defined(metrics):

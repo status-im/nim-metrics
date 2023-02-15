@@ -4,8 +4,11 @@
 #   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import net, os, unittest,
+import net, os, unittest2,
       ../metrics
+
+{.warning[UnusedImport]:off.}
+import stew/shims/stddefects
 
 when defined(metrics):
   import times
@@ -79,9 +82,9 @@ suite "counter":
       if switch:
         raise newException(ValueError, "exc1")
       else:
-        raise newException(IndexError, "exc2")
+        raise newException(IndexDefect, "exc2")
 
-    expect IndexError:
+    expect IndexDefect:
       myCounter.countExceptions(ValueError):
         f(false)
     check myCounter.value == 0
@@ -91,7 +94,7 @@ suite "counter":
         f(true)
     check myCounter.value == 1
 
-    expect IndexError:
+    expect IndexDefect:
       myCounter.countExceptions:
         f(false)
     check myCounter.value == 2
