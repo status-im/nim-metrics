@@ -4,7 +4,7 @@
 #   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import net, os, unittest,
+import net, os, unittest2,
       ../metrics
 
 when defined(metrics):
@@ -73,13 +73,18 @@ suite "counter":
     check counter("one:off:counter:colons").value == 1
 
   test "exceptions":
+    when (NimMajor, NimMinor) >= (1, 6):
+      type IndexEx = IndexDefect
+    else:
+      type IndexEx = IndexError
+
     proc f(switch: bool) =
       if switch:
         raise newException(ValueError, "exc1")
       else:
-        raise newException(IndexError, "exc2")
+        raise newException(IndexEx, "exc2")
 
-    expect IndexError:
+    expect IndexEx:
       myCounter.countExceptions(ValueError):
         f(false)
     check myCounter.value == 0
@@ -89,7 +94,7 @@ suite "counter":
         f(true)
     check myCounter.value == 1
 
-    expect IndexError:
+    expect IndexEx:
       myCounter.countExceptions:
         f(false)
     check myCounter.value == 2

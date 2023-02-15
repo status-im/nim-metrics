@@ -1,4 +1,4 @@
-import metrics
+import ../metrics
 
 {.used.}
 

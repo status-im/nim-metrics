@@ -20,7 +20,7 @@ let styleCheckStyle = if (NimMajor, NimMinor) < (1, 6): "hint" else: "error"
 let cfg =
   " --styleCheck:usages --styleCheck:" & styleCheckStyle &
   (if verbose: "" else: " --verbosity:0 --hints:off") &
-  " --skipParentCfg --skipUserCfg --outdir:build --nimcache:build/nimcache -f"
+  " --skipUserCfg --outdir:build --nimcache:build/nimcache -f"
 
 proc build(args, path: string) =
   exec nimc & " " & lang & " " & cfg & " " & flags & " " & args & " " & path
@@ -44,7 +44,7 @@ task test, "Main tests":
   run "-d:metrics --threads:on", "tests/chronos_server_tests"
 
 task test_chronicles, "Chronicles tests":
-  build "chronicles_tests", "tests/chronicles_tests"
+  build "", "tests/chronicles_tests"
   run "-d:metrics --threads:on", "tests/chronicles_tests"
 
 task benchmark, "Run benchmarks":
