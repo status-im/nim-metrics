@@ -398,8 +398,8 @@ when defined(metrics):
       # no backends configured
       return
 
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:off.}
+    when defined(nimHasWarnBareExcept):
+      {.push warning[BareExcept]:off.}
 
     # Send a new metric to the thread handling the networking.
     # Silently drop it if the channel's buffer is full.
@@ -415,8 +415,8 @@ when defined(metrics):
     except Exception as e:
       printError(e.msg)
 
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:on.}
+    when defined(nimHasWarnBareExcept):
+      {.pop.}
 
   # connect or reconnect the socket at position i in `sockets`
   proc reconnectSocket(i: int, backend: ExportBackend) {.raises: [Defect, OSError].} =
@@ -427,8 +427,8 @@ when defined(metrics):
                  # export as many metric updates as possible with a missing backend
       return
 
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:off.}
+    when defined(nimHasWarnBareExcept):
+      {.push warning[BareExcept]:off.}
 
     # try to close any existing socket, first
     if sockets[i] != nil:
@@ -456,8 +456,8 @@ when defined(metrics):
         discard
       sockets[i] = nil
 
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:on.}
+    when defined(nimHasWarnBareExcept):
+      {.pop.}
 
   proc pushMetricsWorker() {.thread.} =
     ignoreSignalsInThread()
@@ -471,8 +471,8 @@ when defined(metrics):
     # seed the simple PRNG we're using for sample rates
     randomize()
 
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:off.}
+    when defined(nimHasWarnBareExcept):
+      {.push warning[BareExcept]:off.}
 
     # No custom cleanup needed here, so let this thread be killed, the sockets
     # closed, etc., by the OS.
@@ -523,8 +523,8 @@ when defined(metrics):
     except Exception as e: # std lib raises lots of these
       printError(e.msg)
 
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:on.}
+    when defined(nimHasWarnBareExcept):
+      {.pop.}
 
   exportThread.createThread(pushMetricsWorker)
 
@@ -599,8 +599,8 @@ else:
 
 proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
-    when (NimMajor, NimMinor) >= (1,6):
-      {.warning[BareExcept]:off.}
+    when defined(nimHasWarnBareExcept):
+      {.push warning[BareExcept]:off.}
 
     try:
       var timestamp = getTime().toMilliseconds()
@@ -621,8 +621,8 @@ proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels
     except Exception as e:
       printError(e.msg)
 
-    when (NimMajor, NimMinor) >= (1,6):
-      {.warning[BareExcept]:on.}
+    when defined(nimHasWarnBareExcept):
+      {.pop.}
 
 template inc*(counter: Counter | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics) and counter is not IgnoredCollector:
@@ -630,8 +630,8 @@ template inc*(counter: Counter | type IgnoredCollector, amount: int64|float64 = 
 
 template countExceptions*(counter: Counter | type IgnoredCollector, typ: typedesc, labelValues: LabelsParam, body: untyped) =
   when defined(metrics) and counter is not IgnoredCollector:
-    when (NimMajor, NimMinor) >= (1,6):
-      {.warning[BareExcept]:off.}
+    when defined(nimHasWarnBareExcept):
+      {.push warning[BareExcept]:off.}
 
     try:
       body
@@ -639,8 +639,8 @@ template countExceptions*(counter: Counter | type IgnoredCollector, typ: typedes
       counter.inc(1, labelValues)
       raise exc
 
-    when (NimMajor, NimMinor) >= (1,6):
-      {.warning[BareExcept]:on.}
+    when defined(nimHasWarnBareExcept):
+      {.pop.}
   else:
     body
 
@@ -722,8 +722,8 @@ template declarePublicGauge*(identifier: untyped,
 
 proc incGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:off.}
+    when defined(nimHasWarnBareExcept):
+      {.push warning[BareExcept]:off.}
 
     try:
       var timestamp = getTime().toMilliseconds()
@@ -739,8 +739,8 @@ proc incGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam 
     except Exception as e:
       printError(e.msg)
 
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:on.}
+    when defined(nimHasWarnBareExcept):
+      {.pop.}
 
 proc decGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics):
@@ -748,8 +748,8 @@ proc decGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam 
 
 proc setGauge(gauge: Gauge, value: int64|float64, labelValues: LabelsParam = @[], doUpdateSystemMetrics: bool) =
   when defined(metrics):
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:off.}
+    when defined(nimHasWarnBareExcept):
+      {.push warning[BareExcept]:off.}
 
     try:
       var timestamp = getTime().toMilliseconds()
@@ -766,8 +766,8 @@ proc setGauge(gauge: Gauge, value: int64|float64, labelValues: LabelsParam = @[]
     except Exception as e:
       printError(e.msg)
 
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:on.}
+    when defined(nimHasWarnBareExcept):
+      {.pop.}
 
 # the "type IgnoredCollector" case is covered by Counter.inc()
 template inc*(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
@@ -882,8 +882,8 @@ else:
 
 proc observeSummary(summary: Summary, amount: int64|float64, labelValues: LabelsParam = @[]) =
   when defined(metrics):
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:off.}
+    when defined(nimHasWarnBareExcept):
+      {.push warning[BareExcept]:off.}
 
     try:
       var timestamp = getTime().toMilliseconds()
@@ -897,8 +897,8 @@ proc observeSummary(summary: Summary, amount: int64|float64, labelValues: Labels
     except Exception as e:
       printError(e.msg)
 
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:on.}
+    when defined(nimHasWarnBareExcept):
+      {.pop.}
 
 template observe*(summary: Summary | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics) and summary is not IgnoredCollector:
@@ -997,8 +997,8 @@ else:
 
 proc observeHistogram(histogram: Histogram, amount: int64|float64, labelValues: LabelsParam = @[]) =
   when defined(metrics):
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:off.}
+    when defined(nimHasWarnBareExcept):
+      {.push warning[BareExcept]:off.}
 
     try:
       var timestamp = getTime().toMilliseconds()
@@ -1019,8 +1019,8 @@ proc observeHistogram(histogram: Histogram, amount: int64|float64, labelValues: 
     except Exception as e:
       printError(e.msg)
 
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:on.}
+    when defined(nimHasWarnBareExcept):
+      {.pop.}
 
 # the "type IgnoredCollector" case is covered by Summary.observe()
 template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
@@ -1050,8 +1050,8 @@ when defined(metrics):
     systemMetricsUpdateInterval = value
 
   proc updateThreadMetrics*() {.gcsafe.} =
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:off.}
+    when defined(nimHasWarnBareExcept):
+      {.push warning[BareExcept]:off.}
 
     for i in 0 ..< threadMetricsUpdateProcsIndex:
       try:
@@ -1061,8 +1061,8 @@ when defined(metrics):
       except Exception as e:
         raise newException(Defect, e.msg)
 
-    when (NimMajor, NimMinor) >= (1, 6):
-      {.warning[BareExcept]:on.}
+    when defined(nimHasWarnBareExcept):
+      {.pop.}
 
   # No longer used for all system metrics, which now are custom collectors, but
   # still used for main-thread metrics.
