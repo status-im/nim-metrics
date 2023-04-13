@@ -27,6 +27,8 @@ proc build(args, path: string) =
 
 proc run(args, path: string) =
   build args & " -r", path
+  if (NimMajor, NimMinor) > (1, 6):
+    build args & " --mm:refc -r", path
 
 ### tasks
 task test, "Main tests":
@@ -49,4 +51,3 @@ task test_chronicles, "Chronicles tests":
 
 task benchmark, "Run benchmarks":
   run "-d:metrics --threads:on -d:release", "benchmarks/bench_collectors"
-
