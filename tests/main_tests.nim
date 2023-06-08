@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022 Status Research & Development GmbH
+# Copyright (c) 2019-2023 Status Research & Development GmbH
 # Licensed and distributed under either of
 #   * MIT license: http://opensource.org/licenses/MIT
 #   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
@@ -6,9 +6,6 @@
 
 import net, os, unittest2,
       ../metrics
-
-{.warning[UnusedImport]:off.}
-import stew/shims/stddefects
 
 when defined(metrics):
   import times
