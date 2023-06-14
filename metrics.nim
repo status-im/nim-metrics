@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022 Status Research & Development GmbH
+# Copyright (c) 2019-2023 Status Research & Development GmbH
 # Licensed and distributed under either of
 #   * MIT license: http://opensource.org/licenses/MIT
 #   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
@@ -22,12 +22,6 @@ when defined(metrics):
   import algorithm, hashes, random, sequtils, strutils,
     metrics/common
 
-  # dealings with deprecated defects
-  # Nim still claims stddefects is an unused import, sigh
-  # although we really use it, in templates sandwich   
-  {.warning[UnusedImport]:off.}
-  import stew/shims/stddefects
-  
   export tables # for custom collectors that need to work with the "Metrics" type
   when defined(posix):
     import posix
