@@ -11,6 +11,18 @@
         "sha1": "e921dc5c078061e8d2b2d536c702548a6ead42cd"
       }
     },
+    "stew": {
+      "version": "0.1.0",
+      "vcsRevision": "ebbb391b9e87bb50907f8a17546cd383c41a713e",
+      "url": "https://github.com/status-im/nim-stew",
+      "downloadMethod": "git",
+      "dependencies": [
+        "unittest2"
+      ],
+      "checksums": {
+        "sha1": "4e99fe0d84af0b68cf2e9e070b91619352cd5cd2"
+      }
+    },
     "httputils": {
       "version": "0.3.0",
       "vcsRevision": "a85bd52ae0a956983ca6b3267c72961d2ec0245f",
