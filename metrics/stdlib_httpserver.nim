@@ -49,7 +49,7 @@ when defined(metrics):
         printError(e.msg)
         sleep(1000)
 
-{.push raises: [Defect].}
+{.push raises: [].}
 
 proc startMetricsHttpServer*(address = "127.0.0.1", port = Port(8000)) {.
      raises: [Exception].} =

@@ -14,10 +14,10 @@
 # * Raise a tracked exception - we use this strategy during collector
 #   registration
 
-{.push raises: [Defect].} # Disabled further down for some parts of the code
+{.push raises: [].} # Disabled further down for some parts of the code
 
-import locks, net, os, sets, tables, times
-  
+import std/[locks, net, os, sets, tables, times]
+
 when defined(metrics):
   import algorithm, hashes, random, sequtils, strutils,
     metrics/common
@@ -130,11 +130,11 @@ when defined(metrics):
     template validLabel(label): bool =
       validate(label, labelStartChars, labelChars)
 
-  proc validateName*(name: string) {.raises: [Defect, ValueError].} =
+  proc validateName*(name: string) {.raises: [ValueError].} =
     if not validName(name):
       raise newException(ValueError, "Invalid name: '" & name & "'. It should match the regex: " & nameRegexStr)
 
-  proc validateLabels(labels: LabelsParam, invalidLabelNames: openArray[string] = []) {.raises: [Defect, ValueError].} =
+  proc validateLabels(labels: LabelsParam, invalidLabelNames: openArray[string] = []) {.raises: [ValueError].} =
     for label in labels:
       if not validLabel(label):
         raise newException(ValueError, "Invalid label: '" & label & "'. It should match the regex: '" & labelRegexStr & "'.")
@@ -151,7 +151,7 @@ when defined(metrics):
   template getEmptyLabelValues*(collector: Collector): Labels =
     sequtils.repeat("", len(collector.labels))
 
-  proc validateLabelValues*(collector: Collector, labelValues: LabelsParam): Labels {.raises: [Defect, ValueError].} =
+  proc validateLabelValues*(collector: Collector, labelValues: LabelsParam): Labels {.raises: [ValueError].} =
     if labelValues.len == 0:
       result = collector.getEmptyLabelValues()
     elif labelValues.len != collector.labels.len:
@@ -200,7 +200,7 @@ when defined(metrics):
 
   # Used for custom collectors, to shield the API user from having to deal with
   # internal details like lock initialisation.
-  proc buildCollector* [T] (typ: typedesc[T], name: string, help: string, labels: LabelsParam = @[]): T {.raises: [Defect, ValueError].} =
+  proc buildCollector* [T] (typ: typedesc[T], name: string, help: string, labels: LabelsParam = @[]): T {.raises: [ValueError].} =
     validateName(name)
     validateLabels(labels)
     result = T(name: name,
@@ -229,7 +229,7 @@ template value*(collector: Collector | type IgnoredCollector, labelValues: Label
 proc valueByNameInternal*(collector: Collector | type IgnoredCollector,
                   metricName: string,
                   labelValues: LabelsParam = @[],
-                  extraLabelValues: LabelsParam = @[]): float64 {.raises: [Defect, ValueError].} =
+                  extraLabelValues: LabelsParam = @[]): float64 {.raises: [ValueError].} =
   when defined(metrics) and collector is not IgnoredCollector:
     let allLabelValues = @labelValues & @extraLabelValues
     withLock collector.lock:
@@ -258,7 +258,7 @@ var defaultRegistry* {.global.} = newRegistry()
 
 # We use a generic type here in order to avoid the hidden type casting of
 # Collector child types to the parent type.
-proc register* [T] (collector: T, registry = defaultRegistry) {.raises: [Defect, RegistrationError].} =
+proc register* [T] (collector: T, registry = defaultRegistry) {.raises: [RegistrationError].} =
   when defined(metrics):
     withLock registry.lock:
       if collector in registry.collectors:
@@ -266,7 +266,7 @@ proc register* [T] (collector: T, registry = defaultRegistry) {.raises: [Defect,
 
       registry.collectors.incl(collector)
 
-proc unregister* [T] (collector: T, registry = defaultRegistry) {.raises: [Defect, RegistrationError].} =
+proc unregister* [T] (collector: T, registry = defaultRegistry) {.raises: [RegistrationError].} =
   when defined(metrics) and collector is not IgnoredCollector:
     withLock registry.lock:
       if collector notin registry.collectors:
@@ -308,7 +308,7 @@ when defined(metrics):
   # duplication.
   proc newCollector* [T] (typ: typedesc[T], name: string, help: string, labels: LabelsParam = @[],
                           registry = defaultRegistry, standardType = "gauge"): T
-                          {.raises: [Defect, ValueError, RegistrationError].} =
+                          {.raises: [ValueError, RegistrationError].} =
     validateName(name)
     validateLabels(labels)
     result = T(name: name,
@@ -382,7 +382,7 @@ when defined(metrics):
     systemMetricsAutomaticUpdate = value
 
   proc pushMetrics*(name: string, value: float64, increment = 0.float64, metricType: string,
-    timestamp: int64, sampleRate = 1.float, doUpdateSystemMetrics = true) {.raises: [Defect].} =
+    timestamp: int64, sampleRate = 1.float, doUpdateSystemMetrics = true) {.raises: [].} =
     # this may run from different threads
 
     if systemMetricsAutomaticUpdate and doUpdateSystemMetrics:
@@ -413,7 +413,7 @@ when defined(metrics):
       {.pop.}
 
   # connect or reconnect the socket at position i in `sockets`
-  proc reconnectSocket(i: int, backend: ExportBackend) {.raises: [Defect, OSError].} =
+  proc reconnectSocket(i: int, backend: ExportBackend) {.raises: [OSError].} =
     # Throttle it.
     # We don't expect enough backends to worry about the thundering herd problem.
     if getTime() - lastConnectionTime[i] < RECONNECT_INTERVAL:
@@ -538,7 +538,7 @@ when defined(metrics):
             value: getTime().toUnix().float64),
     ]
 
-  proc validateCounterLabelValues(counter: Counter, labelValues: LabelsParam): Labels {.raises: [Defect, ValueError].} =
+  proc validateCounterLabelValues(counter: Counter, labelValues: LabelsParam): Labels {.raises: [ValueError].} =
     result = validateLabelValues(counter, labelValues)
     if result notin counter.metrics:
       counter.metrics[result] = newCounterMetrics(counter.name, counter.labels, result)
@@ -547,7 +547,7 @@ when defined(metrics):
   # won't work when all (or some) collectors are disabled
   proc newCounter*(name: string, help: string, labels: LabelsParam = @[],
                   registry = defaultRegistry, sampleRate = 1.float): Counter
-                  {.raises: [Defect, ValueError, RegistrationError].} =
+                  {.raises: [ValueError, RegistrationError].} =
     result = Counter.newCollector(name, help, labels, registry, "counter")
     result.sampleRate = sampleRate
     if labels.len == 0:
@@ -581,7 +581,7 @@ template declarePublicCounter*(identifier: untyped,
 #- different collector types with the same names are allowed
 #- don't mark this proc as {.inline.} because it's incompatible with {.global.}: https://github.com/status-im/nim-metrics/pull/5#discussion_r304687474
 when defined(metrics):
-  proc counter*(name: static string): Counter {.raises: [Defect, ValueError, RegistrationError].} =
+  proc counter*(name: static string): Counter {.raises: [ValueError, RegistrationError].} =
     # This {.global.} var assignment is lifted from the procedure and placed in a
     # special module init section that's guaranteed to run only once per program.
     # Calls to this proc will just return the globally initialised variable.
@@ -673,14 +673,14 @@ when defined(metrics):
             value: getTime().toUnix().float64),
     ]
 
-  proc validateGaugeLabelValues(gauge: Gauge, labelValues: LabelsParam): Labels  {.raises: [Defect, ValueError].} =
+  proc validateGaugeLabelValues(gauge: Gauge, labelValues: LabelsParam): Labels  {.raises: [ValueError].} =
     result = validateLabelValues(gauge, labelValues)
     if result notin gauge.metrics:
       gauge.metrics[result] = newGaugeMetrics(gauge.name, gauge.labels, result)
 
   proc newGauge*(name: string, help: string, labels: LabelsParam = @[],
                 registry = defaultRegistry): Gauge
-                {.raises: [Defect, ValueError, RegistrationError].} =
+                {.raises: [ValueError, RegistrationError].} =
     result = Gauge.newCollector(name, help, labels, registry, "gauge")
     if labels.len == 0:
       result.metrics[@labels] = newGaugeMetrics(name, labels, labels)
@@ -697,7 +697,7 @@ template declareGauge*(identifier: untyped,
 
 # alternative API
 when defined(metrics):
-  proc gauge*(name: static string): Gauge {.raises: [Defect, ValueError, RegistrationError].} =
+  proc gauge*(name: static string): Gauge {.raises: [ValueError, RegistrationError].} =
     var res {.global.} = newGauge(name, "") # lifted line
     return res
 else:
@@ -833,14 +833,14 @@ when defined(metrics):
             value: getTime().toUnix().float64),
     ]
 
-  proc validateSummaryLabelValues(summary: Summary, labelValues: LabelsParam): Labels {.raises: [Defect, ValueError].} =
+  proc validateSummaryLabelValues(summary: Summary, labelValues: LabelsParam): Labels {.raises: [ValueError].} =
     result = validateLabelValues(summary, labelValues)
     if result notin summary.metrics:
       summary.metrics[result] = newSummaryMetrics(summary.name, summary.labels, result)
 
   proc newSummary*(name: string, help: string, labels: LabelsParam = @[],
                   registry = defaultRegistry): Summary
-                  {.raises: [Defect, ValueError, RegistrationError].} =
+                  {.raises: [ValueError, RegistrationError].} =
     validateLabels(labels, invalidLabelNames = ["quantile"])
     result = Summary.newCollector(name, help, labels, registry, "summary")
     if labels.len == 0:
@@ -867,7 +867,7 @@ template declarePublicSummary*(identifier: untyped,
     type identifier* = IgnoredCollector
 
 when defined(metrics):
-  proc summary*(name: static string): Summary {.raises: [Defect, ValueError, RegistrationError].} =
+  proc summary*(name: static string): Summary {.raises: [ValueError, RegistrationError].} =
     var res {.global.} = newSummary(name, "") # lifted line
     return res
 else:
@@ -938,14 +938,14 @@ when defined(metrics):
               labelValues: @labelValues & bucketStr)
       )
 
-  proc validateHistogramLabelValues(histogram: Histogram, labelValues: LabelsParam): Labels {.raises: [Defect, ValueError].} =
+  proc validateHistogramLabelValues(histogram: Histogram, labelValues: LabelsParam): Labels {.raises: [ValueError].} =
     result = validateLabelValues(histogram, labelValues)
     if result notin histogram.metrics:
       histogram.metrics[result] = newHistogramMetrics(histogram.name, histogram.labels, result, histogram.buckets)
 
   proc newHistogram*(name: string, help: string, labels: LabelsParam = @[],
                     registry = defaultRegistry, buckets: openArray[float64] = defaultHistogramBuckets): Histogram
-                    {.raises: [Defect, ValueError, RegistrationError].} =
+                    {.raises: [ValueError, RegistrationError].} =
     validateLabels(labels, invalidLabelNames = ["le"])
     var bucketsSeq = @buckets
     if bucketsSeq.len > 0 and bucketsSeq[^1] != Inf:
@@ -982,7 +982,7 @@ template declarePublicHistogram*(identifier: untyped,
     type identifier* = IgnoredCollector
 
 when defined(metrics):
-  proc histogram*(name: static string): Histogram {.raises: [Defect, ValueError, RegistrationError].} =
+  proc histogram*(name: static string): Histogram {.raises: [ValueError, RegistrationError].} =
     var res {.global.} = newHistogram(name, "") # lifted line
     return res
 else:
@@ -1028,8 +1028,7 @@ template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: 
 when defined(metrics):
   const metrics_max_hooks = 16
   type
-    SystemMetricsUpdateProc = proc() {.gcsafe, nimcall.}
-    ThreadMetricsUpdateProc = proc() {.gcsafe, nimcall.}
+    ThreadMetricsUpdateProc = proc() {.gcsafe, nimcall, raises: [].}
   let mainThreadID = getThreadId()
   var
     threadMetricsUpdateProcs: array[metrics_max_hooks, ThreadMetricsUpdateProc]
@@ -1044,19 +1043,8 @@ when defined(metrics):
     systemMetricsUpdateInterval = value
 
   proc updateThreadMetrics*() {.gcsafe.} =
-    when defined(nimHasWarnBareExcept):
-      {.push warning[BareExcept]:off.}
-
     for i in 0 ..< threadMetricsUpdateProcsIndex:
-      try:
-        threadMetricsUpdateProcs[i]()
-      except CatchableError as e:
-        printError(e.msg)
-      except Exception as e:
-        raise newException(Defect, e.msg)
-
-    when defined(nimHasWarnBareExcept):
-      {.pop.}
+      threadMetricsUpdateProcs[i]()
 
   # No longer used for all system metrics, which now are custom collectors, but
   # still used for main-thread metrics.
