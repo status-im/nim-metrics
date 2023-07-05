@@ -7,9 +7,6 @@
 import net, os, unittest2,
       ../metrics
 
-{.warning[UnusedImport]:off.}
-import stew/shims/stddefects
-
 when defined(metrics):
   import times
 

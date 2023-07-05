@@ -8,7 +8,7 @@
 # HTTP server (for Prometheus) #
 ################################
 
-{.push raises: [Defect].}
+{.push raises: [].}
 
 when defined(nimHasUsed):
   {.used.}
@@ -290,7 +290,7 @@ proc startMetricsHttpServer*(address = "127.0.0.1", port = Port(8000)) {.
 
 proc new*(t: typedesc[MetricsHttpServerRef], address: string,
           port: Port): Result[MetricsHttpServerRef, cstring] {.
-     raises: [Defect].} =
+     raises: [].} =
   ## Initialize new instance of MetricsHttpServerRef.
   ##
   ## This involves creation of new thread and new processing loop in the new

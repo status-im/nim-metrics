@@ -24,7 +24,7 @@ jobs:
             cpu: amd64
           - os: windows
             cpu: amd64
-        branch: [version-1-2, version-1-4, version-1-6, version-2-0, devel]
+        branch: [version-1-6, version-2-0, devel]
         include:
           - target:
               os: linux
@@ -156,6 +156,5 @@ jobs:
           nimble install -y --depsOnly
           nimble install -y chronicles
           nimble install -y unittest2
-          rm -f nimble.lock
           env NIMFLAGS="${NIMFLAGS} --gc:refc" nimble test
           env NIMFLAGS="${NIMFLAGS} --gc:refc" nimble test_chronicles
