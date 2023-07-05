@@ -154,7 +154,7 @@ jobs:
           nim --version
           nimble --version
           nimble install -y --depsOnly
-          nimble install -y chronicles
+          nimble install -y chronicles@#c9c8e58ec3f89b655a046c485f622f9021c68b61
           nimble install -y unittest2
-          env NIMFLAGS="${NIMFLAGS} --gc:refc" nimble test
-          env NIMFLAGS="${NIMFLAGS} --gc:refc" nimble test_chronicles
+          env NIMFLAGS="${NIMFLAGS} --mm:refc" nimble test
+          env NIMFLAGS="${NIMFLAGS} --mm:refc" nimble test_chronicles
