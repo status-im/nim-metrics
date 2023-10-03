@@ -591,7 +591,7 @@ else:
   template counter*(name: static string): untyped =
     IgnoredCollector
 
-proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
+proc updateCounter(counter: Counter, amount: float64, labelValues: LabelsParam = @[], operation: string) =
   when defined(metrics):
     when defined(nimHasWarnBareExcept):
       {.push warning[BareExcept]:off.}
@@ -599,16 +599,22 @@ proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels
     try:
       var timestamp = getTime().toMilliseconds()
 
-      if amount < 0:
-        raise newException(ValueError, "Counter.inc() cannot be used with negative amounts.")
-
       withLock counter.lock:
         let labelValuesCopy = validateCounterLabelValues(counter, labelValues)
-        counter.metrics[labelValuesCopy][0].value += amount.float64
+
+        # Determine the operation type
+        case operation
+        of "increment":
+          if amount < 0:
+            raise newException(ValueError, "Counter.inc() cannot be used with negative amounts.")
+          counter.metrics[labelValuesCopy][0].value += amount
+        of "reset":
+          counter.metrics[labelValuesCopy][0].value = 0.0
+
         counter.metrics[labelValuesCopy][0].timestamp = timestamp
         pushMetrics(name = counter.name,
                     value = counter.metrics[labelValuesCopy][0].value,
-                    increment = amount.float64,
+                    increment = amount,
                     metricType = "c",
                     timestamp = timestamp,
                     sampleRate = counter.sampleRate)
@@ -620,7 +626,11 @@ proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: Labels
 
 template inc*(counter: Counter | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics) and counter is not IgnoredCollector:
-    {.gcsafe.}: incCounter(counter, amount, labelValues)
+    {.gcsafe.}: updateCounter(counter, amount.float64, labelValues, "increment")
+
+template reset*(counter: Counter | type IgnoredCollector, labelValues: LabelsParam = @[]) =
+  when defined(metrics) and counter is not IgnoredCollector:
+    {.gcsafe.}: updateCounter(counter, 0.0, labelValues, "reset")
 
 template countExceptions*(counter: Counter | type IgnoredCollector, typ: typedesc, labelValues: LabelsParam, body: untyped) =
   when defined(metrics) and counter is not IgnoredCollector:
