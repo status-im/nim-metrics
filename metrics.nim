@@ -591,7 +591,11 @@ else:
   template counter*(name: static string): untyped =
     IgnoredCollector
 
-proc updateCounter(counter: Counter, amount: float64, labelValues: LabelsParam = @[], operation: string) =
+type
+  CounterOp = enum
+    Increment, Reset
+
+proc updateCounter(counter: Counter, amount: float64, labelValues: LabelsParam = @[], operation: CounterOp) =
   when defined(metrics):
     when defined(nimHasWarnBareExcept):
       {.push warning[BareExcept]:off.}
@@ -604,11 +608,11 @@ proc updateCounter(counter: Counter, amount: float64, labelValues: LabelsParam =
 
         # Determine the operation type
         case operation
-        of "increment":
+        of Increment:
           if amount < 0:
             raise newException(ValueError, "Counter.inc() cannot be used with negative amounts.")
           counter.metrics[labelValuesCopy][0].value += amount
-        of "reset":
+        of Reset:
           counter.metrics[labelValuesCopy][0].value = 0.0
 
         counter.metrics[labelValuesCopy][0].timestamp = timestamp
@@ -626,11 +630,11 @@ proc updateCounter(counter: Counter, amount: float64, labelValues: LabelsParam =
 
 template inc*(counter: Counter | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
   when defined(metrics) and counter is not IgnoredCollector:
-    {.gcsafe.}: updateCounter(counter, amount.float64, labelValues, "increment")
+    {.gcsafe.}: updateCounter(counter, amount.float64, labelValues, Increment)
 
 template reset*(counter: Counter | type IgnoredCollector, labelValues: LabelsParam = @[]) =
   when defined(metrics) and counter is not IgnoredCollector:
-    {.gcsafe.}: updateCounter(counter, 0.0, labelValues, "reset")
+    {.gcsafe.}: updateCounter(counter, 0.0, labelValues, Reset)
 
 template countExceptions*(counter: Counter | type IgnoredCollector, typ: typedesc, labelValues: LabelsParam, body: untyped) =
   when defined(metrics) and counter is not IgnoredCollector:
