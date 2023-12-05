@@ -303,7 +303,7 @@ proc new*(t: typedesc[MetricsHttpServerRef], address: string,
       taddress =
         try:
           initTAddress(address, port)
-        except TransportAddressError as exc:
+        except TransportAddressError:
           return err("Invalid server address")
     var
       request =
@@ -333,21 +333,21 @@ proc new*(t: typedesc[MetricsHttpServerRef], address: string,
     var server = MetricsHttpServerRef(data: data)
     try:
       createThread(server.thread, serveMetricsServer, data)
-    except Exception as exc:
+    except Exception:
       return err("Unexpected error while spawning metrics server's thread")
-    except ResourceExhaustedError as exc:
+    except ResourceExhaustedError:
       return err("Unable to spawn metrics server's thread")
 
     server.reqTransp =
       try:
         fromPipe(request.write)
-      except CatchableError as exc:
+      except CatchableError:
         return err("Unable to establish communication channel with " &
                    "metrics server thread")
     server.respTransp =
       try:
         fromPipe(response.read)
-      except CatchableError as exc:
+      except CatchableError:
         return err("Unable to establish communication channel with " &
                    "metrics server thread")
 
