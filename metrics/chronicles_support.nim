@@ -5,53 +5,53 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 from chronicles import formatIt, expandIt
-import ../metrics
+
+import ../metrics, std/[locks, times]
 
 when defined(metrics):
   import tables
 
   formatIt(Metric):
-    it.toText(showTimestamp = false)
+    $it
 
-  proc toLog(collector: Collector): seq[string] =
-    result = @[]
-    for metrics in collector.metrics.values():
-      for metric in metrics:
-        result.add(metric.toText(showTimestamp = false))
-
-  proc toLog(c: Counter): auto =
-    Collector(c).toLog()
+  proc toLog(collector: SimpleCollector): seq[string] =
+    withLock collector.lock:
+      for metrics in collector.metrics:
+        for metric in metrics:
+          result.add($metric)
 
   formatIt(Counter):
     it.toLog
 
-  proc toLog(c: Gauge): auto =
-    Collector(c).toLog()
-
   formatIt(Gauge):
     it.toLog
-
-  proc toLog(c: Summary): auto =
-    Collector(c).toLog()
 
   formatIt(Summary):
     it.toLog
 
-  proc toLog(c: Histogram): auto =
-    Collector(c).toLog()
-
   formatIt(Histogram):
     it.toLog
 
-  proc toLog(registry: Registry): seq[seq[string]] =
-    result = @[]
-    {.gcsafe.}:
-      for metricsTable in registry.collect().values():
-        for metrics in metricsTable.values():
-          var res: seq[string]
-          for metric in metrics:
-            res.add(metric.toText(showTimestamp = false))
-          result.add(res)
+  proc toLog(registry: Registry): seq[string] =
+    var res: seq[string]
+    registry.collect(
+      proc(
+        name: string,
+        value: float64,
+        labels: openArray[string],
+        labelValues: openArray[string],
+        timestamp: Time,
+      ) =
+          res.add(
+            $Metric(
+              name: name,
+              value: value,
+              labels: @labels,
+              labelValues: @labelValues,
+              timestamp: timestamp,
+            )
+          )
+    )
 
   formatIt(Registry):
     it.toLog
@@ -78,4 +78,3 @@ else:
 # ignored collector
 expandIt(type IgnoredCollector):
   ignored = "ignored"
-
