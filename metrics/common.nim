@@ -7,6 +7,9 @@
 when defined(posix):
   import os, posix
 
+# https://prometheus.io/docs/instrumenting/exposition_formats/#basic-info
+const CONTENT_TYPE* = "text/plain; version=0.0.4; charset=utf-8"
+
 proc printError*(msg: string) =
   try:
     writeLine(stderr, "metrics error: " & msg)
@@ -30,10 +33,8 @@ proc ignoreSignalsInThread*() =
         SIGXCPU = 24
         SIGSEGV = 11
         SIGBUS = 7
-      if sigdelset(signalMask, SIGPWR) != 0 or
-        sigdelset(signalMask, SIGXCPU) != 0 or
-        sigdelset(signalMask, SIGSEGV) != 0 or
-        sigdelset(signalMask, SIGBUS) != 0:
+      if sigdelset(signalMask, SIGPWR) != 0 or sigdelset(signalMask, SIGXCPU) != 0 or
+          sigdelset(signalMask, SIGSEGV) != 0 or sigdelset(signalMask, SIGBUS) != 0:
         echo osErrorMsg(osLastError())
         quit(QuitFailure)
     if pthread_sigmask(SIG_BLOCK, signalMask, oldSignalMask) != 0:

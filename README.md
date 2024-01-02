@@ -19,14 +19,12 @@ metrics.
 You can install the development version of the library through Nimble with the
 following command:
 ```
-nimble install https://github.com/status-im/nim-metrics@#master
+nimble install metrics
 ```
 
 ## Usage
 
 To enable metrics, compile your code with `-d:metrics --threads:on`.
-
-To avoid depending on PCRE, compile with `-d:withoutPCRE`.
 
 ## Architectural overview
 
@@ -198,18 +196,17 @@ to read the power consumption every time Prometheus reads your metrics:
 import metrics, times
 
 when defined(metrics):
-  type PowerCollector = ref object of Gauge
-  var powerCollector = PowerCollector.newCollector(name = "power_usage", help = "Instantaneous power usage - in watts.")
+  type PowerCollector = ref object of Collector
+  let powerCollector = PowerCollector.newCollector(name = "power_usage", help = "Instantaneous power usage - in watts.")
 
-  method collect(collector: PowerCollector): Metrics =
-    let timestamp = getTime().toMilliseconds()
-    result[@[]] = @[
-      Metric(
-        name: "power_usage",
-        value: getPowerUsage(), # your power-meter reader
-        timestamp: timestamp,
-      )
-    ]
+  method collect(collector: PowerCollector, output: MetricHandler): Metrics =
+    let timestamp = collector.now()
+    output(
+      name = "power_usage",
+      value = getPowerUsage(), # your power-meter reader
+      timestamp = timestamp,
+    )
+
 ```
 
 There's a bit of repetition in the collector and metric names, because we no
@@ -333,19 +330,11 @@ suite "counter":
 
 ## Prometheus endpoint
 
-First, you need to choose the HTTP server implementation.
-
-### Standard library
-
-Using [asynchttpserver](https://nim-lang.org/docs/asynchttpserver.html) which is based on [asyncdispatch](https://nim-lang.org/docs/asyncdispatch.html) from the Nim standard library:
-
-```nim
-import metrics, metrics/stdlib_httpserver
-```
+First, you need to import the http server module
 
 ### Chronos
 
-Using [Chronos](https://github.com/status-im/nim-chronos/) - an asyncdispatch alternative:
+Using [Chronos](https://github.com/status-im/nim-chronos/):
 
 ```nim
 import metrics, metrics/chronos_httpserver

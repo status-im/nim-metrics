@@ -4,57 +4,71 @@
 #   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# Exceptions coming out of this library are mostly handled but, due to bugs
-# in Nim exception tracking and deficiencies in the standard library, not quite
-# all exceptions can be tracked.
+# The API is roughly based on the Prometheus client library recommendations:
+# https://prometheus.io/docs/instrumenting/writing_clientlibs/
 #
-# When we do manage to catch an unexpected exception, we'll do one of several
-# things:
-# * Try to print the message to stderr
-# * Raise a tracked exception - we use this strategy during collector
-#   registration
+# The Prometheus text exposition format is also tightly coupled:
+# https://prometheus.io/docs/instrumenting/exposition_formats/#text-based-format
 
-{.push raises: [].} # Disabled further down for some parts of the code
+{.push raises: [].}
 
-import std/[locks, net, os, sets, tables, times]
+when defined(metricsTest):
+  {.pragma: testOnly.}
+else:
+  {.pragma: testOnly, deprecated: "slow helpers used for tests only".}
+
+import std/[locks, os, sets, tables, times]
 
 when defined(metrics):
-  import algorithm, hashes, random, sequtils, strutils,
-    metrics/common
+  import std/[algorithm, hashes, sequtils, strutils], stew/ptrops, metrics/common
 
   export tables # for custom collectors that need to work with the "Metrics" type
-  when defined(posix):
-    import posix
 
 type
-  Labels* = seq[string]
-  LabelsParam* = openArray[string]
+  LabelKey = object
+    # Helper type to work around the lack of heterogenous key support in `Table`
+    data: seq[string]
+    refs: ptr UncheckedArray[string]
+    refslen: int
 
-  Metric* = ref object of RootObj
+  Metric* = object
     name*: string
     value*: float64
-    timestamp*: int64 # UTC, in ms
-    labels*: Labels
-    labelValues*: Labels
+    labels*: seq[string]
+    labelValues*: seq[string]
+    timestamp*: Time
 
-  Metrics* = OrderedTable[Labels, seq[Metric]]
+  MetricHandler* =
+    proc(
+      name: string,
+      value: float64,
+      labels: openArray[string] = [],
+      labelValues: openArray[string] = [],
+      timestamp: Time,
+    ) {.gcsafe, raises: [].}
+
+  CollecorHandler* = proc(collector: Collector)
 
   Collector* = ref object of RootObj
     lock*: Lock
     name*: string
     help*: string
     typ*: string
-    labels*: Labels
-    metrics*: Metrics
+    labels*: seq[string]
+    timestamp*: bool ## Whether or not we're collecting timestamps for this collector
     creationThreadId*: int
     sampleRate*: float # only used by StatsD counters
 
+  SimpleCollector* = ref object of Collector
+    metricKeys*: Table[LabelKey, int]
+    metrics*: seq[seq[Metric]]
+
   IgnoredCollector* = object
 
-  Counter* = ref object of Collector
-  Gauge* = ref object of Collector
-  Summary* = ref object of Collector
-  Histogram* = ref object of Collector # a cumulative histogram, not a regular one
+  Counter* = ref object of SimpleCollector
+  Gauge* = ref object of SimpleCollector
+  Summary* = ref object of SimpleCollector
+  Histogram* = ref object of SimpleCollector # a cumulative histogram, not a regular one
     buckets*: seq[float64]
 
   Registry* = ref object of RootObj
@@ -63,106 +77,164 @@ type
 
   RegistrationError* = object of CatchableError
 
-const CONTENT_TYPE* = "text/plain; version=0.0.4; charset=utf-8"
-
 #########
 # utils #
 #########
 
 when defined(metrics):
+  template values(key: LabelKey): openArray[string] =
+    if key.refslen > 0:
+      key.refs.toOpenArray(0, key.refslen - 1)
+    else:
+      key.data
+
+  proc hash(key: LabelKey): Hash =
+    hash(key.values)
+
+  proc `==`(a, b: LabelKey): bool =
+    a.values == b.values
+
+  proc init(T: type LabelKey, values: openArray[string]): T =
+    LabelKey(data: @values)
+
+  proc view(T: type LabelKey, values: openArray[string]): T =
+    # TODO some day, we might get view types - until then..
+    LabelKey(refs: baseAddr(values).makeUncheckedArray(), refslen: values.len())
+
   proc toMilliseconds*(time: times.Time): int64 =
-    return convert(Seconds, Milliseconds, time.toUnix()) + convert(Nanoseconds, Milliseconds, time.nanosecond())
+    convert(Seconds, Milliseconds, time.toUnix()) +
+      convert(Nanoseconds, Milliseconds, time.nanosecond())
 
-  template processHelp*(help: string): string =
-    help.multiReplace([("\\", "\\\\"), ("\n", "\\n")])
+  template nameOrIdentifier*(identifier: untyped, name: string): string =
+    if name.len == 0:
+      astToStr(identifier)
+    else:
+      name
 
-  template processLabelValue*(labelValue: string): string =
+  proc processHelp(name, help: string): string =
+    "# HELP " & name & " " & help.multiReplace([("\\", "\\\\"), ("\n", "\\n")]) & "\n"
+
+  proc processType(name, typ: string): string =
+    "# TYPE " & name & " " & typ & "\n"
+
+  template processLabelValue(labelValue: string): string =
     labelValue.multiReplace([("\\", "\\\\"), ("\n", "\\n"), ("\"", "\\\"")])
 
-  proc toText*(metric: Metric, showTimestamp = true): string =
-    result = metric.name
-    if metric.labels.len > 0:
-      result.add('{')
-      var textLabels: seq[string] = @[]
-      for i in 0..metric.labels.high:
-        try:
-          textLabels.add("$#=\"$#\"" % [metric.labels[i], metric.labelValues[i].processLabelValue()])
-        except ValueError as e:
-          printError(e.msg)
-      result.add(textLabels.join(","))
-      result.add('}')
-    result.add(" " & $metric.value)
-    if showTimestamp and metric.timestamp > 0:
-      result.add(" " & $metric.timestamp)
+  proc addText(
+      res: var string,
+      name: string,
+      value: float64,
+      labels, labelValues: openArray[string],
+      timestamp: Time,
+  ) =
+    # A bit convoluted to mostly avoid pointless memory allocations - there's no
+    # (trivial) way however to append a float to an existing string
+    res.add name
+    if labels.len > 0:
+      res.add('{')
+      for i in 0..labels.high:
+        if i > 0:
+          res.add ","
+        res.add labels[i]
+        res.add "=\""
+        if labelValues.len > i:
+          res.add labelValues[i]
+        res.add "\""
+      res.add('}')
+    res.add(" ")
+    res.add($value)
+    if toMilliseconds(timestamp) > 0:
+      res.add(" " & $toMilliseconds(timestamp))
+
+  proc addText(res: var string, metric: Metric) =
+    addText(
+      res,
+      metric.name,
+      metric.value,
+      metric.labels,
+      metric.labelValues,
+      metric.timestamp,
+    )
 
   proc `$`*(metric: Metric): string =
-    metric.toText()
+    addText(result, metric)
 
   const
     nameRegexStr = r"^[a-zA-Z_:][a-zA-Z0-9_:]*$"
     labelRegexStr = r"^[a-zA-Z_][a-zA-Z0-9_]*$"
 
-  when not defined(withoutPCRE):
-    import re
+    labelStartChars = {'a'..'z', 'A'..'Z', '_'}
+    labelChars = labelStartChars + {'0'..'9'}
+    nameStartChars = labelStartChars + {':'}
+    nameChars = labelChars + {':'}
 
-    let
-      nameRegex {.global.} = re(nameRegexStr)
-      labelRegex {.global.} = re(labelRegexStr)
+  template validate(ident: string, startChars, chars: typed): bool =
+    ident.len > 0 and ident[0] in startChars and ident.allIt(it in chars)
 
-    template validName(name): bool =
-      name.contains(nameRegex)
+  proc validateName(name: string) {.raises: [ValueError].} =
+    if not validate(name, nameStartChars, nameChars):
+      raise newException(
+          ValueError,
+          "Invalid name: '" & name & "'. It should match the regex: " & nameRegexStr,
+        )
 
-    template validLabel(label): bool =
-      label.contains(labelRegex)
-  else:
-    const
-      labelStartChars = {'a'..'z', 'A'..'Z', '_'}
-      labelChars = labelStartChars + {'0'..'9'}
-      nameStartChars = labelStartChars + {':'}
-      nameChars = labelChars + {':'}
-
-    template validate(ident, startChars, chars): bool =
-      ident.len > 0 and ident[0] in startChars and @ident.allIt(it in chars)
-
-    template validName(name): bool =
-      validate(name, nameStartChars, nameChars)
-
-    template validLabel(label): bool =
-      validate(label, labelStartChars, labelChars)
-
-  proc validateName*(name: string) {.raises: [ValueError].} =
-    if not validName(name):
-      raise newException(ValueError, "Invalid name: '" & name & "'. It should match the regex: " & nameRegexStr)
-
-  proc validateLabels(labels: LabelsParam, invalidLabelNames: openArray[string] = []) {.raises: [ValueError].} =
+  proc validateLabels(
+      labels: openArray[string], invalidLabelNames: openArray[string] = []
+  ) {.raises: [ValueError].} =
     for label in labels:
-      if not validLabel(label):
-        raise newException(ValueError, "Invalid label: '" & label & "'. It should match the regex: '" & labelRegexStr & "'.")
+      if not validate(label, labelStartChars, labelChars):
+        raise newException(
+            ValueError,
+            "Invalid label: '" & label & "'. It should match the regex: '" &
+              labelRegexStr & "'.",
+          )
       if label.startsWith("__"):
-        raise newException(ValueError, "Invalid label: '" & label & "'. It should not start with '__'.")
+        raise newException(
+            ValueError, "Invalid label: '" & label & "'. It should not start with '__'."
+          )
       if label in invalidLabelNames:
-        raise newException(ValueError, "Invalid label: '" & label & "'. It should not be one of: " & $invalidLabelNames & ".")
+        raise newException(
+            ValueError,
+            "Invalid label: '" & label & "'. It should not be one of: " &
+              $invalidLabelNames & ".",
+          )
 
 ######################
 # generic collectors #
 ######################
 
 when defined(metrics):
-  template getEmptyLabelValues*(collector: Collector): Labels =
-    sequtils.repeat("", len(collector.labels))
-
-  proc validateLabelValues*(collector: Collector, labelValues: LabelsParam): Labels {.raises: [ValueError].} =
-    if labelValues.len == 0:
-      result = collector.getEmptyLabelValues()
-    elif labelValues.len != collector.labels.len:
-      raise newException(ValueError, "The number of label values doesn't match the number of labels.")
+  template withLabelValues(
+      collector: SimpleCollector,
+      labelValues: openArray[string],
+      metricSym, body, construct: untyped,
+  ) =
+    if labelValues.len > 0 and labelValues.len != collector.labels.len:
+      printError(
+        "The number of label values doesn't match the number of labels: " &
+          collector.name
+      )
     else:
-      result = @labelValues
+      withLock(collector.lock):
+        collector.metricKeys.withValue(LabelKey.view(labelValues), metricsIdx):
+          template metricSym(): untyped =
+            collector.metrics[metricsIdx[]]
 
-    # avoid having to change another thread's heap
-    if result notin collector.metrics and collector.creationThreadId != getThreadId():
-      raise newException(AccessViolationDefect,
-        "Adding a new combination of label values from another thread than the one in which the collector was created is not allowed.")
+          body
+        do:
+          if collector.creationThreadId != getThreadId():
+            printError(
+              "New label values must be added from same thread as the metric was created from - observation dropped: " &
+                collector.name
+            )
+          else:
+            collector.metrics.add construct
+            collector.metricKeys[LabelKey.init(labelValues)] = collector.metrics.high
+            collector.metricKeys.withValue(LabelKey.view(labelValues), metricsIdx):
+              template metricSym(): untyped =
+                collector.metrics[metricsIdx[]]
+
+              body
 
   method hash*(collector: Collector): Hash {.base.} =
     result = result !& collector.name.hash
@@ -170,79 +242,125 @@ when defined(metrics):
       result = result !& label.hash
     result = !$result
 
-  # Hash-based data types like OrderedSet don't just compare hashes to determine
-  # if a key is present, but also compare the keys themselves, so we need to
-  # override the `==` operator.
+  # `hash` and equals must match
   method `==`*(x, y: Collector): bool {.base.} =
     x.name == y.name and x.labels == y.labels
 
-  method collect*(collector: Collector): Metrics {.base.} =
-    return collector.metrics
+  proc now*(collector: Collector): Time =
+    if collector.timestamp:
+      getTime()
+    else:
+      Time()
 
-  proc toTextLines*(collector: Collector, metricsTable: Metrics, showTimestamp = true): seq[string] =
-    try:
-      result = @[
-        "# HELP $# $#" % [collector.name, collector.help.processHelp()],
-        "# TYPE $# $#" % [collector.name, collector.typ],
-      ]
-      for labelValues, metrics in metricsTable:
-        for metric in metrics:
-          result.add(metric.toText(showTimestamp))
-    except ValueError as e:
-      printError(e.msg)
-      result = @[""]
+  proc call(output: MetricHandler, metric: Metric) =
+    output(
+      metric.name, metric.value, metric.labels, metric.labelValues, metric.timestamp
+    )
 
-  proc toText*(collector: Collector, showTimestamp = true): string =
-    collector.toTextLines(collector.metrics, showTimestamp).join("\n")
+  method collect*(collector: Collector, output: MetricHandler) {.base.} =
+    discard
+
+  method collect*(collector: SimpleCollector, output: MetricHandler) =
+    {.warning[LockLevel]: off.}
+    withLock(collector.lock):
+      for key, idx in collector.metricKeys:
+        for metric in collector.metrics[idx]:
+          call(output, metric)
+
+  proc collect*(registry: Registry, output: MetricHandler) =
+    withLock registry.lock:
+      for collector in registry.collectors:
+        collector.collect(output)
+
+  proc addText(res: var string, collector: Collector) =
+    res.add collector.help
+    res.add collector.typ
+
+    let resPtr = addr res
+
+    proc addMetric(
+        name: string,
+        value: float64,
+        labels, labelValues: openArray[string],
+        timestamp: Time,
+    ) =
+      addText(resPtr[], name, value, labels, labelValues, timestamp)
+      resPtr[].add "\n"
+
+    collect(collector, addMetric)
 
   proc `$`*(collector: Collector): string =
-    collector.toText()
+    addText(result, collector)
 
-  # Used for custom collectors, to shield the API user from having to deal with
-  # internal details like lock initialisation.
-  proc buildCollector* [T] (typ: typedesc[T], name: string, help: string, labels: LabelsParam = @[]): T {.raises: [ValueError].} =
-    validateName(name)
-    validateLabels(labels)
-    result = T(name: name,
-              help: help,
-              typ: "gauge", # Prometheus does not support a non-standard value here
-              labels: @labels,
-              creationThreadId: getThreadId())
-    result.lock.initLock()
+proc `$`*(collector: type IgnoredCollector): string =
+  ""
 
-proc `$`*(collector: type IgnoredCollector): string = ""
-
-# for testing
-template value*(collector: Collector | type IgnoredCollector, labelValues: LabelsParam = @[]): float64 =
-  var res: float64
+template value*(
+    collector: Collector | type IgnoredCollector,
+    labelValuesParam: openArray[string] = [],
+): float64 {.testOnly.} =
+  var res = NaN
   when defined(metrics) and collector is not IgnoredCollector:
     # Don't access the "metrics" field directly, so we can support custom
     # collectors.
     {.gcsafe.}:
-      withLock collector.lock:
-        res = collector.collect()[@labelValues][0].value
+      let lv = @labelValuesParam.mapIt(it.processLabelValue())
+      proc findMetric(
+          name: string,
+          value: float64,
+          labels, labelValues: openArray[string],
+          timestamp: Time,
+      ) =
+        if res != res and labelValues == lv:
+          res = value
+
+      collect(collector, findMetric)
+      if res != res: # NaN
+        raise newException(
+            KeyError,
+            "No such metric for this collector (label values = " & $(@labelValuesParam) &
+              ").",
+          )
   else:
     res = 0.0
   res
 
-# for testing
-proc valueByNameInternal*(collector: Collector | type IgnoredCollector,
-                  metricName: string,
-                  labelValues: LabelsParam = @[],
-                  extraLabelValues: LabelsParam = @[]): float64 {.raises: [ValueError].} =
+proc valueByNameInternal*(
+    collector: Collector | type IgnoredCollector,
+    metricName: string,
+    labelValues: openArray[string] = [],
+    extraLabelValues: openArray[string] = [],
+): float64 {.raises: [ValueError].} =
   when defined(metrics) and collector is not IgnoredCollector:
-    let allLabelValues = @labelValues & @extraLabelValues
-    withLock collector.lock:
-      for metric in collector.collect()[@labelValues]:
-        if metric.name == metricName and metric.labelValues == allLabelValues:
-          return metric.value
-    raise newException(KeyError, "No such metric name for this collector: '" & metricName & "' (label values = " & $allLabelValues & ").")
+    var res = NaN
+    let allLabelValues = labelValues.mapIt(it.processLabelValue()) & @extraLabelValues
+    proc findMetric(
+        name: string,
+        value: float64,
+        labels, labelValues: openArray[string],
+        timestamp: Time,
+    ) =
+      if res != res and name == metricName and labelValues == allLabelValues:
+        res = value
 
-template valueByName*(collector: Collector | type IgnoredCollector,
-                  metricName: string,
-                  labelValues: LabelsParam = @[],
-                  extraLabelValues: LabelsParam = @[]): float64 =
-  {.gcsafe.}: valueByNameInternal(collector, metricName, labelValues, extraLabelValues)
+    collect(collector, findMetric)
+    if res == res:
+      return res
+
+    raise newException(
+        KeyError,
+        "No such metric name for this collector: '" & metricName & "' (label values = " &
+          $allLabelValues & ").",
+      )
+
+template valueByName*(
+    collector: Collector | type IgnoredCollector,
+    metricName: string,
+    labelValues: openArray[string] = [],
+    extraLabelValues: openArray[string] = [],
+): float64 {.testOnly.} =
+  {.gcsafe.}:
+    valueByNameInternal(collector, metricName, labelValues, extraLabelValues)
 
 ############
 # registry #
@@ -254,19 +372,25 @@ proc newRegistry*(): Registry =
     result.lock.initLock()
 
 # needs to be {.global.} because of the alternative API's usage of {.global.} collector vars
-var defaultRegistry* {.global.} = newRegistry()
+let defaultRegistry* {.global.} = newRegistry()
 
 # We use a generic type here in order to avoid the hidden type casting of
 # Collector child types to the parent type.
-proc register* [T] (collector: T, registry = defaultRegistry) {.raises: [RegistrationError].} =
+proc register*[T](
+    collector: T, registry = defaultRegistry
+) {.raises: [RegistrationError].} =
   when defined(metrics):
     withLock registry.lock:
       if collector in registry.collectors:
-        raise newException(RegistrationError, "Collector already registered: " & collector.name)
+        raise newException(
+            RegistrationError, "Collector already registered: " & collector.name
+          )
 
       registry.collectors.incl(collector)
 
-proc unregister* [T] (collector: T, registry = defaultRegistry) {.raises: [RegistrationError].} =
+proc unregister*[T](
+    collector: T, registry = defaultRegistry
+) {.raises: [RegistrationError].} =
   when defined(metrics) and collector is not IgnoredCollector:
     withLock registry.lock:
       if collector notin registry.collectors:
@@ -274,28 +398,29 @@ proc unregister* [T] (collector: T, registry = defaultRegistry) {.raises: [Regis
 
       registry.collectors.excl(collector)
 
-proc unregister* (collector: type IgnoredCollector, registry = defaultRegistry) = discard
+proc unregister*(collector: type IgnoredCollector, registry = defaultRegistry) =
+  discard
 
-proc collect*(registry: Registry): OrderedTable[Collector, Metrics] =
+proc len(registry: Registry): int =
+  when defined(metrics):
+    withLock registry.lock:
+      return registry.collectors.len()
+  else:
+    0
+
+proc addText(res: var string, registry: Registry) =
   when defined(metrics):
     withLock registry.lock:
       for collector in registry.collectors:
-        var collectorCopy: Collector
-        withLock collector.lock:
-          deepCopy(collectorCopy, collector)
-        collectorCopy.lock.initLock()
-        result[collectorCopy] = collectorCopy.collect()
+        res.addText(collector)
+        res.add("\n")
 
-proc toText*(registry: Registry, showTimestamp = true): string =
-  when defined(metrics):
-    var res: seq[string] = @[]
-    for collector, metricsTable in registry.collect():
-      res.add(collector.toTextLines(metricsTable, showTimestamp))
-      res.add("")
-    return res.join("\n")
+proc toText*(registry: Registry): string =
+  result = newStringOfCap(registry.len() * 64)
+  result.addText(registry)
 
 proc `$`*(registry: Registry): string =
-  registry.toText()
+  addText(result, registry)
 
 #####################
 # custom collectors #
@@ -306,274 +431,181 @@ when defined(metrics):
   # internal details like lock initialisation.
   # Also used internally, for creating standard collectors, to avoid code
   # duplication.
-  proc newCollector* [T] (typ: typedesc[T], name: string, help: string, labels: LabelsParam = @[],
-                          registry = defaultRegistry, standardType = "gauge"): T
-                          {.raises: [ValueError, RegistrationError].} =
+  proc newCollector*[T](
+      typ: typedesc[T],
+      name: string,
+      help: string,
+      labels: openArray[string] = [],
+      registry = defaultRegistry,
+      standardType = "gauge",
+      timestamp = false,
+  ): T {.raises: [ValueError, RegistrationError].} =
     validateName(name)
     validateLabels(labels)
-    result = T(name: name,
-              help: help,
-              typ: standardType, # Prometheus does not support a non-standard value here
-              labels: @labels,
-              creationThreadId: getThreadId())
+    result =
+      T(
+        name: name,
+        help: processHelp(name, help),
+        typ: processType(name, standardType),
+          # Prometheus does not support a non-standard value here
+        labels: @labels,
+        creationThreadId: getThreadId(),
+        timestamp: timestamp,
+      )
     result.lock.initLock()
     result.register(registry)
 
-#######################################
-# export metrics to StatsD and Carbon #
-#######################################
+#####################
+# push metrics hook #
+#####################
 
 when defined(metrics):
-  type
-    MetricProtocol* = enum
-      STATSD
-      CARBON
-
-    NetProtocol* = enum
-      TCP
-      UDP
-
-    ExportBackend* = object
-      metricProtocol*: MetricProtocol
-      netProtocol*: NetProtocol
-      address*: string
-      port*: Port
-
-    ExportedMetric = object
-      name: string
-      value: float64
-      increment: float64
-      metricType: string
-      timestamp: int64
-      sampleRate: float # only used by StatsD
-
-  const
-    METRIC_EXPORT_BUFER_SIZE = 1024 # used by exportChan
-    CONNECT_TIMEOUT_MS = 100 # in milliseconds
-    RECONNECT_INTERVAL = initDuration(seconds = 10)
-
   var
-    exportBackends*: seq[ExportBackend] = @[]
-    exportBackendsLock*: Lock
-    exportChan: Channel[ExportedMetric]
-    exportThread: Thread[void]
-    sockets: seq[Socket] = @[] # we maintain one socket per backend
-    lastConnectionTime: seq[times.Time] = @[] # last time we tried to connect the corresponding socket
-
-  initLock(exportBackendsLock)
-  exportChan.open(maxItems = METRIC_EXPORT_BUFER_SIZE)
-
-  proc addExportBackend*(metricProtocol: MetricProtocol, netProtocol: NetProtocol, address: string, port: Port) =
-    withLock(exportBackendsLock):
-      exportBackends.add(ExportBackend(
-                          metricProtocol: metricProtocol,
-                          netProtocol: netProtocol,
-                          address: address,
-                          port: port
-                        ))
+    metricsExportHook*:
+      proc(
+        name: string,
+        value: float64,
+        increment: float64,
+        metricType: string,
+        timestamp: Time,
+        sampleRate: float,
+      ) {.nimcall, gcsafe, raises: [].} = nil
 
   proc updateSystemMetrics*() {.gcsafe.} # defined later in this file
-  var systemMetricsAutomaticUpdate = true # whether to piggy-back on changes of user-defined metrics
+  var systemMetricsAutomaticUpdate = true
+    # whether to piggy-back on changes of user-defined metrics
 
   proc getSystemMetricsAutomaticUpdate*(): bool =
-    return systemMetricsAutomaticUpdate
+    systemMetricsAutomaticUpdate
 
   proc setSystemMetricsAutomaticUpdate*(value: bool) =
     systemMetricsAutomaticUpdate = value
 
-  proc pushMetrics*(name: string, value: float64, increment = 0.float64, metricType: string,
-    timestamp: int64, sampleRate = 1.float, doUpdateSystemMetrics = true) {.raises: [].} =
+  proc pushMetrics*(
+      name: string,
+      value: float64,
+      increment = 0.float64,
+      metricType: string,
+      timestamp: Time,
+      sampleRate = 1.float,
+      doUpdateSystemMetrics = true,
+  ) {.raises: [].} =
     # this may run from different threads
-
     if systemMetricsAutomaticUpdate and doUpdateSystemMetrics:
       updateSystemMetrics()
 
-    if len(exportBackends) == 0:
+    if metricsExportHook == nil:
       # no backends configured
       return
 
-    when defined(nimHasWarnBareExcept):
-      {.push warning[BareExcept]:off.}
-
-    # Send a new metric to the thread handling the networking.
-    # Silently drop it if the channel's buffer is full.
-    try:
-      discard exportChan.trySend(ExportedMetric(
-                                  name: name,
-                                  value: value,
-                                  increment: increment,
-                                  metricType: metricType,
-                                  timestamp: timestamp,
-                                  sampleRate: sampleRate
-                                ))
-    except Exception as e:
-      printError(e.msg)
-
-    when defined(nimHasWarnBareExcept):
-      {.pop.}
-
-  # connect or reconnect the socket at position i in `sockets`
-  proc reconnectSocket(i: int, backend: ExportBackend) {.raises: [OSError].} =
-    # Throttle it.
-    # We don't expect enough backends to worry about the thundering herd problem.
-    if getTime() - lastConnectionTime[i] < RECONNECT_INTERVAL:
-      sleep(100) # silly optimisation for an artificial benchmark where we try to
-                 # export as many metric updates as possible with a missing backend
-      return
-
-    when defined(nimHasWarnBareExcept):
-      {.push warning[BareExcept]:off.}
-
-    # try to close any existing socket, first
-    if sockets[i] != nil:
-      try:
-        sockets[i].close()
-      except:
-        discard
-      sockets[i] = nil # we use this as a flag to avoid sends without a connection
-
-    # create a new socket
-    case backend.netProtocol:
-      of UDP:
-        sockets[i] = newSocket(Domain.AF_INET, SockType.SOCK_DGRAM, Protocol.IPPROTO_UDP)
-      of TCP:
-        sockets[i] = newSocket()
-
-    # try to connect
-    lastConnectionTime[i] = getTime()
-    try:
-      sockets[i].connect(backend.address, backend.port, timeout = CONNECT_TIMEOUT_MS)
-    except:
-      try:
-        sockets[i].close()
-      except:
-        discard
-      sockets[i] = nil
-
-    when defined(nimHasWarnBareExcept):
-      {.pop.}
-
-  proc pushMetricsWorker() {.thread.} =
-    ignoreSignalsInThread()
-
-    var
-      data: ExportedMetric # received from the channel
-      payload: string
-      finalValue: float64
-      sampleString: string
-
-    # seed the simple PRNG we're using for sample rates
-    randomize()
-
-    when defined(nimHasWarnBareExcept):
-      {.push warning[BareExcept]:off.}
-
-    # No custom cleanup needed here, so let this thread be killed, the sockets
-    # closed, etc., by the OS.
-    try:
-      while true:
-        data = exportChan.recv() # blocking read
-        withLock(exportBackendsLock):
-          {.gcsafe.}:
-            # Account for backends added after this thread is launched. We don't
-            # support backend deletion.
-            if len(sockets) < len(exportBackends):
-              sockets.setLen(len(exportBackends))
-            if len(lastConnectionTime) < len(exportBackends):
-              lastConnectionTime.setLen(len(exportBackends))
-
-            # send the metrics
-            for i, backend in exportBackends:
-              case backend.metricProtocol:
-                of STATSD:
-                  finalValue = data.value
-                  sampleString = ""
-
-                  if data.metricType == "c":
-                    # StatsD wants only the counter's increment, while Carbon wants the cumulated value
-                    finalValue = data.increment
-
-                    # If the sample rate was set, throw the dice here.
-                    if data.sampleRate > 0 and data.sampleRate < 1.float:
-                      if rand(max = 1.float) > data.sampleRate:
-                        # skip it
-                        continue
-                      sampleString = "|@" & $data.sampleRate
-                  payload = "$#:$#|$#$#\n" % [data.name, $finalValue, data.metricType, sampleString]
-                of CARBON:
-                  # Carbon wants a 32-bit timestamp in seconds.
-                  payload = "$# $# $#\n" % [data.name, $data.value, $(data.timestamp div 1000).int32]
-
-              if sockets[i] == nil:
-                reconnectSocket(i, backend)
-                if sockets[i] == nil:
-                  # we're in the waiting period
-                  continue
-
-              try:
-                sockets[i].send(payload, flags = {}) # the default flags would not raise an exception on a broken connection
-              except OSError:
-                reconnectSocket(i, backend)
-    except Exception as e: # std lib raises lots of these
-      printError(e.msg)
-
-    when defined(nimHasWarnBareExcept):
-      {.pop.}
-
-  exportThread.createThread(pushMetricsWorker)
+    metricsExportHook(name, value, increment, metricType, timestamp, sampleRate)
 
 ###########
 # counter #
 ###########
 
 when defined(metrics):
-  proc newCounterMetrics(name: string, labels, labelValues: LabelsParam): seq[Metric] =
-    result = @[
-      Metric(name: name & "_total",
-            labels: @labels,
-            labelValues: @labelValues),
-      Metric(name: name & "_created",
-            labels: @labels,
-            labelValues: @labelValues,
-            value: getTime().toUnix().float64),
+  proc newCounterMetrics(
+      name: string, labels, labelValues: openArray[string]
+  ): seq[Metric] =
+    let labelValues = labelValues.mapIt(it.processLabelValue())
+    @[
+      Metric(name: name & "_total", labels: @labels, labelValues: labelValues),
+      Metric(
+        name: name & "_created",
+        labels: @labels,
+        labelValues: labelValues,
+        value: getTime().toUnix().float64,
+      )
     ]
-
-  proc validateCounterLabelValues(counter: Counter, labelValues: LabelsParam): Labels {.raises: [ValueError].} =
-    result = validateLabelValues(counter, labelValues)
-    if result notin counter.metrics:
-      counter.metrics[result] = newCounterMetrics(counter.name, counter.labels, result)
 
   # don't document this one, even if we're forced to make it public, because it
   # won't work when all (or some) collectors are disabled
-  proc newCounter*(name: string, help: string, labels: LabelsParam = @[],
-                  registry = defaultRegistry, sampleRate = 1.float): Counter
-                  {.raises: [ValueError, RegistrationError].} =
-    result = Counter.newCollector(name, help, labels, registry, "counter")
+  proc newCounter*(
+      name: string,
+      help: string,
+      labels: openArray[string] = [],
+      registry = defaultRegistry,
+      sampleRate = 1.float,
+      timestamp = false,
+  ): Counter {.raises: [ValueError, RegistrationError].} =
+    result = Counter.newCollector(name, help, labels, registry, "counter", timestamp)
     result.sampleRate = sampleRate
     if labels.len == 0:
-      result.metrics[@labels] = newCounterMetrics(name, labels, labels)
+      result.metrics.add newCounterMetrics(name, labels, labels)
+      result.metricKeys[LabelKey.init(labels)] = result.metrics.high()
 
-template declareCounter*(identifier: untyped,
-                        help: static string,
-                        labels: LabelsParam = @[],
-                        registry = defaultRegistry,
-                        sampleRate = 1.float,
-                        name = "") {.dirty.} =
+  proc incCounter(counter: Counter, amount: float64, labelValues: openArray[string]) =
+    when defined(metrics):
+      let timestamp = counter.now()
+
+      if amount < 0:
+        printError(
+          "Counter.inc() cannot be used with negative amounts: " & $counter.name & "=" &
+            $amount
+        )
+        return
+
+      withLabelValues(counter, labelValues, valueSym):
+        valueSym[0].value += amount
+        valueSym[0].timestamp = timestamp
+
+        pushMetrics(
+          name = counter.name,
+          value = valueSym[0].value,
+          increment = amount,
+          metricType = "c",
+          timestamp = timestamp,
+          sampleRate = counter.sampleRate,
+        )
+      do:
+        newCounterMetrics(counter.name, counter.labels, labelValues)
+
+template declareCounter*(
+    identifier: untyped,
+    help: static string,
+    labels: openArray[string] = [],
+    registry = defaultRegistry,
+    sampleRate = 1.float,
+    name = "",
+    timestamp = false,
+) {.dirty.} =
   # fine-grained collector disabling will go in here, turning disabled
   # collectors into type aliases for IgnoredCollector
   when defined(metrics):
-    var identifier = newCounter(if name != "": name else: astToStr(identifier), help, labels, registry, sampleRate)
+    let
+      identifier =
+        newCounter(
+          nameOrIdentifier(identifier, name),
+          help,
+          labels,
+          registry,
+          sampleRate,
+          timestamp,
+        )
   else:
     type identifier = IgnoredCollector
 
-template declarePublicCounter*(identifier: untyped,
-                               help: static string,
-                               labels: LabelsParam = @[],
-                               registry = defaultRegistry,
-                               sampleRate = 1.float,
-                               name = "") {.dirty.} =
+template declarePublicCounter*(
+    identifier: untyped,
+    help: static string,
+    labels: openArray[string] = [],
+    registry = defaultRegistry,
+    sampleRate = 1.float,
+    name = "",
+    timestamp = false,
+) {.dirty.} =
   when defined(metrics):
-    var identifier* = newCounter(if name != "": name else: astToStr(identifier), help, labels, registry, sampleRate)
+    let
+      identifier* =
+        newCounter(
+          nameOrIdentifier(identifier, name),
+          help,
+          labels,
+          registry,
+          sampleRate,
+          timestamp,
+        )
   else:
     type identifier* = IgnoredCollector
 
@@ -581,78 +613,62 @@ template declarePublicCounter*(identifier: untyped,
 #- different collector types with the same names are allowed
 #- don't mark this proc as {.inline.} because it's incompatible with {.global.}: https://github.com/status-im/nim-metrics/pull/5#discussion_r304687474
 when defined(metrics):
-  proc counter*(name: static string): Counter {.raises: [ValueError, RegistrationError].} =
+  proc counter*(
+      name: static string
+  ): Counter {.raises: [ValueError, RegistrationError].} =
     # This {.global.} var assignment is lifted from the procedure and placed in a
     # special module init section that's guaranteed to run only once per program.
     # Calls to this proc will just return the globally initialised variable.
     var res {.global.} = newCounter(name, "")
     return res
+
 else:
   template counter*(name: static string): untyped =
     IgnoredCollector
 
-proc incCounter(counter: Counter, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
-  when defined(metrics):
-    when defined(nimHasWarnBareExcept):
-      {.push warning[BareExcept]:off.}
-
-    try:
-      var timestamp = getTime().toMilliseconds()
-
-      if amount < 0:
-        raise newException(ValueError, "Counter.inc() cannot be used with negative amounts.")
-
-      withLock counter.lock:
-        let labelValuesCopy = validateCounterLabelValues(counter, labelValues)
-        counter.metrics[labelValuesCopy][0].value += amount.float64
-        counter.metrics[labelValuesCopy][0].timestamp = timestamp
-        pushMetrics(name = counter.name,
-                    value = counter.metrics[labelValuesCopy][0].value,
-                    increment = amount.float64,
-                    metricType = "c",
-                    timestamp = timestamp,
-                    sampleRate = counter.sampleRate)
-    except Exception as e:
-      printError(e.msg)
-
-    when defined(nimHasWarnBareExcept):
-      {.pop.}
-
-template inc*(counter: Counter | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
+template inc*(
+    counter: Counter | type IgnoredCollector,
+    amount: int64 | float64 = 1,
+    labelValues: openArray[string] = [],
+) =
   when defined(metrics) and counter is not IgnoredCollector:
-    {.gcsafe.}: incCounter(counter, amount, labelValues)
+    {.gcsafe.}:
+      incCounter(counter, amount.float64, labelValues)
 
-template countExceptions*(counter: Counter | type IgnoredCollector, typ: typedesc, labelValues: LabelsParam, body: untyped) =
+template countExceptions*(
+    counter: Counter | type IgnoredCollector,
+    typ: typedesc,
+    labelValues: openArray[string],
+    body: untyped,
+) =
   when defined(metrics) and counter is not IgnoredCollector:
-    when defined(nimHasWarnBareExcept):
-      {.push warning[BareExcept]:off.}
-
     try:
       body
     except typ as exc:
       counter.inc(1, labelValues)
       raise exc
-
-    when defined(nimHasWarnBareExcept):
-      {.pop.}
   else:
     body
 
-template countExceptions*(counter: Counter | type IgnoredCollector, typ: typedesc, body: untyped) =
+template countExceptions*(
+    counter: Counter | type IgnoredCollector, typ: typedesc, body: untyped
+) =
   when defined(metrics) and counter is not IgnoredCollector:
-    let labelValues: Labels = @[]
-    counter.countExceptions(typ, labelValues):
+    counter.countExceptions(typ, []):
       body
   else:
     body
 
-template countExceptions*(counter: Counter | type IgnoredCollector, labelValues: LabelsParam, body: untyped) =
+template countExceptions*(
+    counter: Counter | type IgnoredCollector,
+    labelValues: openArray[string],
+    body: untyped,
+) =
   countExceptions(counter, Exception, labelValues, body)
 
 template countExceptions*(counter: Counter | type IgnoredCollector, body: untyped) =
   when defined(metrics) and counter is not IgnoredCollector:
-    let labelValues: Labels = @[]
-    counter.countExceptions(labelValues):
+    counter.countExceptions([]):
       body
   else:
     body
@@ -662,36 +678,84 @@ template countExceptions*(counter: Counter | type IgnoredCollector, body: untype
 #########
 
 when defined(metrics):
-  proc newGaugeMetrics(name: string, labels, labelValues: LabelsParam): seq[Metric] =
-    result = @[
-      Metric(name: name,
-            labels: @labels,
-            labelValues: @labelValues),
-      Metric(name: name & "_created",
-            labels: @labels,
-            labelValues: @labelValues,
-            value: getTime().toUnix().float64),
-    ]
+  proc newGaugeMetrics(
+      name: string, labels, labelValues: openArray[string]
+  ): seq[Metric] =
+    let labelValues = labelValues.mapIt(it.processLabelValue())
+    result =
+      @[
+        Metric(name: name, labels: @labels, labelValues: labelValues),
+        Metric(
+          name: name & "_created",
+          labels: @labels,
+          labelValues: labelValues,
+          value: getTime().toUnix().float64,
+        )
+      ]
 
-  proc validateGaugeLabelValues(gauge: Gauge, labelValues: LabelsParam): Labels  {.raises: [ValueError].} =
-    result = validateLabelValues(gauge, labelValues)
-    if result notin gauge.metrics:
-      gauge.metrics[result] = newGaugeMetrics(gauge.name, gauge.labels, result)
-
-  proc newGauge*(name: string, help: string, labels: LabelsParam = @[],
-                registry = defaultRegistry): Gauge
-                {.raises: [ValueError, RegistrationError].} =
-    result = Gauge.newCollector(name, help, labels, registry, "gauge")
+  proc newGauge*(
+      name: string,
+      help: string,
+      labels: openArray[string] = [],
+      registry = defaultRegistry,
+      timestamp = false,
+  ): Gauge {.raises: [ValueError, RegistrationError].} =
+    result = Gauge.newCollector(name, help, labels, registry, "gauge", timestamp)
     if labels.len == 0:
-      result.metrics[@labels] = newGaugeMetrics(name, labels, labels)
+      result.metrics.add newGaugeMetrics(name, labels, labels)
+      result.metricKeys[LabelKey.init(labels)] = result.metrics.high()
 
-template declareGauge*(identifier: untyped,
-                      help: static string,
-                      labels: LabelsParam = @[],
-                      registry = defaultRegistry,
-                      name = "") {.dirty.} =
+  proc incGauge(gauge: Gauge, amount: float64, labelValues: openArray[string]) =
+    when defined(metrics):
+      let timestamp = gauge.now()
+
+      withLabelValues(gauge, labelValues, valueSym):
+        valueSym[0].value += amount
+        valueSym[0].timestamp = timestamp
+        pushMetrics(
+          name = gauge.name,
+          value = valueSym[0].value,
+          metricType = "g",
+          timestamp = timestamp,
+        )
+      do:
+        newGaugeMetrics(gauge.name, gauge.labels, labelValues)
+
+  proc setGauge(
+      gauge: Gauge,
+      value: float64,
+      labelValues: openArray[string],
+      doUpdateSystemMetrics: bool,
+  ) =
+    when defined(metrics):
+      let timestamp = gauge.now()
+
+      withLabelValues(gauge, labelValues, valueSym):
+        valueSym[0].value = value.float64
+        if gauge.timestamp:
+          valueSym[0].timestamp = getTime()
+        pushMetrics(
+          name = gauge.name,
+          value = value.float64,
+          metricType = "g",
+          timestamp = timestamp,
+          doUpdateSystemMetrics = doUpdateSystemMetrics,
+        )
+      do:
+        newGaugeMetrics(gauge.name, gauge.labels, labelValues)
+
+template declareGauge*(
+    identifier: untyped,
+    help: static string,
+    labels: openArray[string] = [],
+    registry = defaultRegistry,
+    name = "",
+    timestamp = false,
+) {.dirty.} =
   when defined(metrics):
-    var identifier = newGauge(if name != "": name else: astToStr(identifier), help, labels, registry)
+    var
+      identifier =
+        newGauge(nameOrIdentifier(identifier, name), help, labels, registry, timestamp)
   else:
     type identifier = IgnoredCollector
 
@@ -700,88 +764,62 @@ when defined(metrics):
   proc gauge*(name: static string): Gauge {.raises: [ValueError, RegistrationError].} =
     var res {.global.} = newGauge(name, "") # lifted line
     return res
+
 else:
   template gauge*(name: static string): untyped =
     IgnoredCollector
 
-template declarePublicGauge*(identifier: untyped,
-                            help: static string,
-                            labels: LabelsParam = @[],
-                            registry = defaultRegistry,
-                            name = "") {.dirty.} =
+template declarePublicGauge*(
+    identifier: untyped,
+    help: static string,
+    labels: openArray[string] = [],
+    registry = defaultRegistry,
+    name = "",
+    timestamp = false,
+) {.dirty.} =
   when defined(metrics):
-    var identifier* = newGauge(if name != "": name else: astToStr(identifier), help, labels, registry)
+    var
+      identifier* =
+        newGauge(nameOrIdentifier(identifier, name), help, labels, registry, timestamp)
   else:
     type identifier* = IgnoredCollector
 
-proc incGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
-  when defined(metrics):
-    when defined(nimHasWarnBareExcept):
-      {.push warning[BareExcept]:off.}
-
-    try:
-      var timestamp = getTime().toMilliseconds()
-
-      withLock gauge.lock:
-        let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
-        gauge.metrics[labelValuesCopy][0].value += amount.float64
-        gauge.metrics[labelValuesCopy][0].timestamp = timestamp
-        pushMetrics(name = gauge.name,
-                    value = gauge.metrics[labelValuesCopy][0].value,
-                    metricType = "g",
-                    timestamp = timestamp)
-    except Exception as e:
-      printError(e.msg)
-
-    when defined(nimHasWarnBareExcept):
-      {.pop.}
-
-proc decGauge(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
-  when defined(metrics):
-    gauge.inc((-amount).float64, labelValues)
-
-proc setGauge(gauge: Gauge, value: int64|float64, labelValues: LabelsParam = @[], doUpdateSystemMetrics: bool) =
-  when defined(metrics):
-    when defined(nimHasWarnBareExcept):
-      {.push warning[BareExcept]:off.}
-
-    try:
-      var timestamp = getTime().toMilliseconds()
-
-      withLock gauge.lock:
-        let labelValuesCopy = validateGaugeLabelValues(gauge, labelValues)
-        gauge.metrics[labelValuesCopy][0].value = value.float64
-        gauge.metrics[labelValuesCopy][0].timestamp = timestamp
-        pushMetrics(name = gauge.name,
-                    value = value.float64,
-                    metricType = "g",
-                    timestamp = timestamp,
-                    doUpdateSystemMetrics = doUpdateSystemMetrics)
-    except Exception as e:
-      printError(e.msg)
-
-    when defined(nimHasWarnBareExcept):
-      {.pop.}
-
 # the "type IgnoredCollector" case is covered by Counter.inc()
-template inc*(gauge: Gauge, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
+template inc*(
+    gauge: Gauge, amount: int64 | float64 = 1, labelValues: openArray[string] = []
+) =
   when defined(metrics):
-    {.gcsafe.}: incGauge(gauge, amount, labelValues)
+    {.gcsafe.}:
+      incGauge(gauge, amount.float64, labelValues)
 
-template dec*(gauge: Gauge | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
+template dec*(
+    gauge: Gauge | type IgnoredCollector,
+    amount: int64 | float64 = 1,
+    labelValues: openArray[string] = [],
+) =
   when defined(metrics) and gauge is not IgnoredCollector:
-    {.gcsafe.}: decGauge(gauge, amount, labelValues)
+    inc(gauge, -amount, labelValues)
 
-template set*(gauge: Gauge | type IgnoredCollector, value: int64|float64, labelValues: LabelsParam = @[], doUpdateSystemMetrics = true) =
+template set*(
+    gauge: Gauge | type IgnoredCollector,
+    value: int64 | float64,
+    labelValues: openArray[string] = [],
+    doUpdateSystemMetrics = true,
+) =
   when defined(metrics) and gauge is not IgnoredCollector:
-    {.gcsafe.}: setGauge(gauge, value, labelValues, doUpdateSystemMetrics)
+    {.gcsafe.}:
+      setGauge(gauge, value.float64, labelValues, doUpdateSystemMetrics)
 
 # in seconds
-proc setToCurrentTime*(gauge: Gauge | type IgnoredCollector, labelValues: LabelsParam = @[]) =
+proc setToCurrentTime*(
+    gauge: Gauge | type IgnoredCollector, labelValues: openArray[string] = []
+) =
   when defined(metrics) and gauge is not IgnoredCollector:
     gauge.set(getTime().toUnix(), labelValues)
 
-template trackInProgress*(gauge: Gauge | type IgnoredCollector, labelValues: LabelsParam, body: untyped) =
+template trackInProgress*(
+    gauge: Gauge | type IgnoredCollector, labelValues: openArray[string], body: untyped
+) =
   when defined(metrics) and gauge is not IgnoredCollector:
     gauge.inc(1, labelValues)
     body
@@ -791,14 +829,15 @@ template trackInProgress*(gauge: Gauge | type IgnoredCollector, labelValues: Lab
 
 template trackInProgress*(gauge: Gauge | type IgnoredCollector, body: untyped) =
   when defined(metrics) and gauge is not IgnoredCollector:
-    let labelValues: Labels = @[]
-    gauge.trackInProgress(labelValues):
+    gauge.trackInProgress([]):
       body
   else:
     body
 
 # in seconds
-template time*(gauge: Gauge | type IgnoredCollector, labelValues: LabelsParam, body: untyped) =
+template time*(
+    gauge: Gauge | type IgnoredCollector, labelValues: openArray[string], body: untyped
+) =
   when defined(metrics) and gauge is not IgnoredCollector:
     let start = times.toUnix(getTime())
     body
@@ -806,10 +845,11 @@ template time*(gauge: Gauge | type IgnoredCollector, labelValues: LabelsParam, b
   else:
     body
 
-template time*(collector: Gauge | Summary | Histogram | type IgnoredCollector, body: untyped) =
+template time*(
+    collector: Gauge | Summary | Histogram | type IgnoredCollector, body: untyped
+) =
   when defined(metrics) and collector is not IgnoredCollector:
-    let labelValues: Labels = @[]
-    collector.time(labelValues):
+    collector.time([]):
       body
   else:
     body
@@ -819,88 +859,99 @@ template time*(collector: Gauge | Summary | Histogram | type IgnoredCollector, b
 ###########
 
 when defined(metrics):
-  proc newSummaryMetrics(name: string, labels, labelValues: LabelsParam): seq[Metric] =
-    result = @[
-      Metric(name: name & "_sum",
-            labels: @labels,
-            labelValues: @labelValues),
-      Metric(name: name & "_count",
-            labels: @labels,
-            labelValues: @labelValues),
-      Metric(name: name & "_created",
-            labels: @labels,
-            labelValues: @labelValues,
-            value: getTime().toUnix().float64),
+  proc newSummaryMetrics(
+      name: string, labels, labelValues: openArray[string]
+  ): seq[Metric] =
+    let labelValues = labelValues.mapIt(it.processLabelValue())
+    @[
+      Metric(name: name & "_sum", labels: @labels, labelValues: labelValues),
+      Metric(name: name & "_count", labels: @labels, labelValues: labelValues),
+      Metric(
+        name: name & "_created",
+        labels: @labels,
+        labelValues: labelValues,
+        value: getTime().toUnix().float64,
+      )
     ]
 
-  proc validateSummaryLabelValues(summary: Summary, labelValues: LabelsParam): Labels {.raises: [ValueError].} =
-    result = validateLabelValues(summary, labelValues)
-    if result notin summary.metrics:
-      summary.metrics[result] = newSummaryMetrics(summary.name, summary.labels, result)
-
-  proc newSummary*(name: string, help: string, labels: LabelsParam = @[],
-                  registry = defaultRegistry): Summary
-                  {.raises: [ValueError, RegistrationError].} =
+  proc newSummary*(
+      name: string,
+      help: string,
+      labels: openArray[string] = [],
+      registry = defaultRegistry,
+      timestamp = false,
+  ): Summary {.raises: [ValueError, RegistrationError].} =
     validateLabels(labels, invalidLabelNames = ["quantile"])
-    result = Summary.newCollector(name, help, labels, registry, "summary")
+    result = Summary.newCollector(name, help, labels, registry, "summary", timestamp)
     if labels.len == 0:
-      result.metrics[@labels] = newSummaryMetrics(name, labels, labels)
+      result.metrics.add newSummaryMetrics(name, labels, labels)
+      result.metricKeys[LabelKey.init(labels)] = result.metrics.high()
 
-template declareSummary*(identifier: untyped,
-                        help: static string,
-                        labels: LabelsParam = @[],
-                        registry = defaultRegistry,
-                        name = "") {.dirty.} =
+  proc observeSummary(summary: Summary, amount: float64, labelValues: openArray[string]) =
+    when defined(metrics):
+      let timestamp = summary.now()
+
+      withLabelValues(summary, labelValues, valueSym):
+        valueSym[0].value += amount # _sum
+        valueSym[0].timestamp = timestamp
+        valueSym[1].value += 1.float64 # _count
+        valueSym[1].timestamp = timestamp
+      do:
+        newSummaryMetrics(summary.name, summary.labels, labelValues)
+
+template declareSummary*(
+    identifier: untyped,
+    help: static string,
+    labels: openArray[string] = [],
+    registry = defaultRegistry,
+    name = "",
+) {.dirty.} =
   when defined(metrics):
-    var identifier = newSummary(if name != "": name else: astToStr(identifier), help, labels, registry)
+    let
+      identifier =
+        newSummary(nameOrIdentifier(identifier, name), help, labels, registry)
   else:
     type identifier = IgnoredCollector
 
-template declarePublicSummary*(identifier: untyped,
-                               help: static string,
-                               labels: LabelsParam = @[],
-                               registry = defaultRegistry,
-                               name = "") {.dirty.} =
+template declarePublicSummary*(
+    identifier: untyped,
+    help: static string,
+    labels: openArray[string] = [],
+    registry = defaultRegistry,
+    name = "",
+) {.dirty.} =
   when defined(metrics):
-    var identifier* = newSummary(if name != "": name else: astToStr(identifier), help, labels, registry)
+    let
+      identifier* =
+        newSummary(nameOrIdentifier(identifier, name), help, labels, registry)
   else:
     type identifier* = IgnoredCollector
 
 when defined(metrics):
-  proc summary*(name: static string): Summary {.raises: [ValueError, RegistrationError].} =
+  proc summary*(
+      name: static string
+  ): Summary {.raises: [ValueError, RegistrationError].} =
     var res {.global.} = newSummary(name, "") # lifted line
     return res
+
 else:
   template summary*(name: static string): untyped =
     IgnoredCollector
 
-proc observeSummary(summary: Summary, amount: int64|float64, labelValues: LabelsParam = @[]) =
-  when defined(metrics):
-    when defined(nimHasWarnBareExcept):
-      {.push warning[BareExcept]:off.}
-
-    try:
-      var timestamp = getTime().toMilliseconds()
-
-      withLock summary.lock:
-        let labelValuesCopy = validateSummaryLabelValues(summary, labelValues)
-        summary.metrics[labelValuesCopy][0].value += amount.float64 # _sum
-        summary.metrics[labelValuesCopy][0].timestamp = timestamp
-        summary.metrics[labelValuesCopy][1].value += 1.float64 # _count
-        summary.metrics[labelValuesCopy][1].timestamp = timestamp
-    except Exception as e:
-      printError(e.msg)
-
-    when defined(nimHasWarnBareExcept):
-      {.pop.}
-
-template observe*(summary: Summary | type IgnoredCollector, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
+template observe*(
+    summary: Summary | type IgnoredCollector,
+    amount: int64 | float64 = 1,
+    labelValues: openArray[string] = [],
+) =
   when defined(metrics) and summary is not IgnoredCollector:
-    {.gcsafe.}: observeSummary(summary, amount, labelValues)
+    {.gcsafe.}:
+      observeSummary(summary, amount.float64, labelValues)
 
 # in seconds
 # the "type IgnoredCollector" case and the version without labels are covered by Gauge.time()
-template time*(collector: Summary | Histogram, labelValues: LabelsParam, body: untyped) =
+template time*(
+    collector: Summary | Histogram, labelValues: openArray[string], body: untyped
+) =
   when defined(metrics):
     let start = times.toUnix(getTime())
     body
@@ -912,114 +963,145 @@ template time*(collector: Summary | Histogram, labelValues: LabelsParam, body: u
 # histogram #
 #############
 
-let defaultHistogramBuckets* {.global.} = [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, Inf]
+let
+  defaultHistogramBuckets* {.global.} = [
+    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, Inf
+  ]
 when defined(metrics):
-  proc newHistogramMetrics(name: string, labels, labelValues: LabelsParam, buckets: seq[float64]): seq[Metric] =
-    result = @[
-      Metric(name: name & "_sum",
-            labels: @labels,
-            labelValues: @labelValues),
-      Metric(name: name & "_count",
-            labels: @labels,
-            labelValues: @labelValues),
-      Metric(name: name & "_created",
-            labels: @labels,
-            labelValues: @labelValues,
-            value: getTime().toUnix().float64),
-    ]
+  proc newHistogramMetrics(
+      name: string, labels, labelValues: openArray[string], buckets: seq[float64]
+  ): seq[Metric] =
+    let labelValues = labelValues.mapIt(it.processLabelValue())
+    result =
+      @[
+        Metric(name: name & "_sum", labels: @labels, labelValues: labelValues),
+        Metric(name: name & "_count", labels: @labels, labelValues: labelValues),
+        Metric(
+          name: name & "_created",
+          labels: @labels,
+          labelValues: labelValues,
+          value: getTime().toUnix().float64,
+        )
+      ]
     var bucketLabels = @labels & "le"
     for bucket in buckets:
       var bucketStr = $bucket
       if bucket == Inf:
         bucketStr = "+Inf"
       result.add(
-        Metric(name: name & "_bucket",
-              labels: bucketLabels,
-              labelValues: @labelValues & bucketStr)
+        Metric(
+          name: name & "_bucket",
+          labels: bucketLabels,
+          labelValues: labelValues & bucketStr,
+        )
       )
 
-  proc validateHistogramLabelValues(histogram: Histogram, labelValues: LabelsParam): Labels {.raises: [ValueError].} =
-    result = validateLabelValues(histogram, labelValues)
-    if result notin histogram.metrics:
-      histogram.metrics[result] = newHistogramMetrics(histogram.name, histogram.labels, result, histogram.buckets)
-
-  proc newHistogram*(name: string, help: string, labels: LabelsParam = @[],
-                    registry = defaultRegistry, buckets: openArray[float64] = defaultHistogramBuckets): Histogram
-                    {.raises: [ValueError, RegistrationError].} =
+  proc newHistogram*(
+      name: string,
+      help: string,
+      labels: openArray[string] = [],
+      registry = defaultRegistry,
+      buckets: openArray[float64] = defaultHistogramBuckets,
+      timestamp = false,
+  ): Histogram {.raises: [ValueError, RegistrationError].} =
     validateLabels(labels, invalidLabelNames = ["le"])
     var bucketsSeq = @buckets
     if bucketsSeq.len > 0 and bucketsSeq[^1] != Inf:
       bucketsSeq.add(Inf)
     if bucketsSeq.len < 2:
-      raise newException(ValueError, "Invalid buckets list: '" & $bucketsSeq & "'. At least 2 required.")
+      raise newException(
+          ValueError,
+          "Invalid buckets list: '" & $bucketsSeq & "'. At least 2 required.",
+        )
     if not bucketsSeq.isSorted(system.cmp[float64]):
-      raise newException(ValueError, "Invalid buckets list: '" & $bucketsSeq & "'. Must be sorted.")
-    result = Histogram.newCollector(name, help, labels, registry, "histogram")
+      raise newException(
+          ValueError, "Invalid buckets list: '" & $bucketsSeq & "'. Must be sorted."
+        )
+    result =
+      Histogram.newCollector(name, help, labels, registry, "histogram", timestamp)
     result.buckets = bucketsSeq
     if labels.len == 0:
-      result.metrics[@labels] = newHistogramMetrics(name, labels, labels, bucketsSeq)
+      result.metrics.add newHistogramMetrics(name, labels, labels, bucketsSeq)
+      result.metricKeys[LabelKey.init(labels)] = result.metrics.high()
 
-template declareHistogram*(identifier: untyped,
-                        help: static string,
-                        labels: LabelsParam = @[],
-                        registry = defaultRegistry,
-                        buckets: openArray[float64] = defaultHistogramBuckets,
-                        name = "") {.dirty.} =
-  when defined(metrics):
-    var identifier = newHistogram(if name != "": name else: astToStr(identifier), help, labels, registry, buckets)
-  else:
-    type identifier = IgnoredCollector
-
-template declarePublicHistogram*(identifier: untyped,
-                               help: static string,
-                               labels: LabelsParam = @[],
-                               registry = defaultRegistry,
-                               buckets: openArray[float64] = defaultHistogramBuckets,
-                               name = "") {.dirty.} =
-  when defined(metrics):
-    var identifier* = newHistogram(if name != "": name else: astToStr(identifier), help, labels, registry, buckets)
-  else:
-    type identifier* = IgnoredCollector
-
-when defined(metrics):
-  proc histogram*(name: static string): Histogram {.raises: [ValueError, RegistrationError].} =
-    var res {.global.} = newHistogram(name, "") # lifted line
-    return res
-else:
-  template histogram*(name: static string): untyped =
-    IgnoredCollector
-
-proc observeHistogram(histogram: Histogram, amount: int64|float64, labelValues: LabelsParam = @[]) =
-  when defined(metrics):
-    when defined(nimHasWarnBareExcept):
-      {.push warning[BareExcept]:off.}
-
-    try:
-      var timestamp = getTime().toMilliseconds()
-
-      withLock histogram.lock:
-        let labelValuesCopy = validateHistogramLabelValues(histogram, labelValues)
-        histogram.metrics[labelValuesCopy][0].value += amount.float64 # _sum
-        histogram.metrics[labelValuesCopy][0].timestamp = timestamp
-        histogram.metrics[labelValuesCopy][1].value += 1.float64 # _count
-        histogram.metrics[labelValuesCopy][1].timestamp = timestamp
+  proc observeHistogram(
+      histogram: Histogram, amount: float64, labelValues: openArray[string]
+  ) =
+    when defined(metrics):
+      let timestamp = histogram.now()
+      withLabelValues(histogram, labelValues, valueSym):
+        valueSym[0].value += amount # _sum
+        valueSym[0].timestamp = timestamp
+        valueSym[1].value += 1.float64 # _count
+        valueSym[1].timestamp = timestamp
         for i, bucket in histogram.buckets:
           if amount.float64 <= bucket:
             #- "le" probably stands for "less or equal"
             #- the same observed value can increase multiple buckets, because this is
             #  a cumulative histogram
-            histogram.metrics[labelValuesCopy][i + 3].value += 1.float64 # _bucket{le="<bucket value>"}
-            histogram.metrics[labelValuesCopy][i + 3].timestamp = timestamp
-    except Exception as e:
-      printError(e.msg)
+            valueSym[i + 3].value += 1.float64 # _bucket{le="<bucket value>"}
+            valueSym[i + 3].timestamp = timestamp
+      do:
+        newHistogramMetrics(
+          histogram.name, histogram.labels, labelValues, histogram.buckets
+        )
 
-    when defined(nimHasWarnBareExcept):
-      {.pop.}
+template declareHistogram*(
+    identifier: untyped,
+    help: static string,
+    labels: openArray[string] = [],
+    registry = defaultRegistry,
+    buckets: openArray[float64] = defaultHistogramBuckets,
+    name = "",
+    timestamp = false,
+) {.dirty.} =
+  when defined(metrics):
+    let
+      identifier =
+        newHistogram(
+          nameOrIdentifier(identifier, name), help, labels, registry, buckets, timestamp
+        )
+  else:
+    type identifier = IgnoredCollector
+
+template declarePublicHistogram*(
+    identifier: untyped,
+    help: static string,
+    labels: openArray[string] = [],
+    registry = defaultRegistry,
+    buckets: openArray[float64] = defaultHistogramBuckets,
+    name = "",
+    timestamp = false,
+) {.dirty.} =
+  when defined(metrics):
+    let
+      identifier* =
+        newHistogram(
+          nameOrIdentifier(identifier, name), help, labels, registry, buckets, timestamp
+        )
+  else:
+    type identifier* = IgnoredCollector
+
+when defined(metrics):
+  proc histogram*(
+      name: static string
+  ): Histogram {.raises: [ValueError, RegistrationError].} =
+    let res {.global.} = newHistogram(name, "") # lifted line
+    return res
+
+else:
+  template histogram*(name: static string): untyped =
+    IgnoredCollector
 
 # the "type IgnoredCollector" case is covered by Summary.observe()
-template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: LabelsParam = @[]) =
+template observe*(
+    histogram: Histogram,
+    amount: int64 | float64 = 1,
+    labelValues: openArray[string] = [],
+) =
   when defined(metrics):
-    {.gcsafe.}: observeHistogram(histogram, amount, labelValues)
+    {.gcsafe.}:
+      observeHistogram(histogram, amount.float64, labelValues)
 
 #########################
 # update system metrics #
@@ -1027,8 +1109,7 @@ template observe*(histogram: Histogram, amount: int64|float64 = 1, labelValues: 
 
 when defined(metrics):
   const metrics_max_hooks = 16
-  type
-    ThreadMetricsUpdateProc = proc() {.gcsafe, nimcall, raises: [].}
+  type ThreadMetricsUpdateProc = proc() {.gcsafe, nimcall, raises: [].}
   let mainThreadID = getThreadId()
   var
     threadMetricsUpdateProcs: array[metrics_max_hooks, ThreadMetricsUpdateProc]
@@ -1043,7 +1124,7 @@ when defined(metrics):
     systemMetricsUpdateInterval = value
 
   proc updateThreadMetrics*() {.gcsafe.} =
-    for i in 0 ..< threadMetricsUpdateProcsIndex:
+    for i in 0..<threadMetricsUpdateProcsIndex:
       threadMetricsUpdateProcs[i]()
 
   # No longer used for all system metrics, which now are custom collectors, but
@@ -1065,8 +1146,7 @@ when defined(metrics):
 ################
 
 when defined(metrics) and defined(linux):
-  import posix
-
+  from posix import sysconf, SC_CLK_TCK, SC_PAGESIZE
   var
     btime {.global.}: float64 = 0
     ticks {.global.}: float64 # clock ticks per second
@@ -1084,11 +1164,12 @@ when defined(metrics) and defined(linux):
     pagesize = sysconf(SC_PAGESIZE).float64
 
   type ProcessInfo = ref object of Gauge
-  var processInfo* {.global.} = ProcessInfo.newCollector("process_info", "CPU and memory usage")
+  var
+    processInfo* {.global.} =
+      ProcessInfo.newCollector("process_info", "CPU and memory usage")
 
-  method collect*(collector: ProcessInfo): Metrics =
-    let timestamp = getTime().toMilliseconds()
-    result[@[]] = @[]
+  method collect*(collector: ProcessInfo, output: MetricHandler) =
+    let timestamp = collector.now()
 
     try:
       if btime == 0:
@@ -1100,46 +1181,44 @@ when defined(metrics) and defined(linux):
       # $ cat /proc/self/stat
       # 30494 (cat) R 3022 30494 3022 34830 30494 4210688 98 0 0 0 0 0 0 0 20 0 1 0 73800491 10379264 189 18446744073709551615 94060049248256 94060049282149 140735229395104 0 0 0 0 0 0 0 0 0 17 6 0 0 0 0 0 94060049300560 94060049302112 94060076990464 140735229397011 140735229397031 140735229397031 140735229403119 0
       let selfStat = readFile("/proc/self/stat").split(") ")[^1].split(' ')
-      result[@[]] = @[
-        Metric(
-          name: "process_virtual_memory_bytes", # Virtual memory size in bytes.
-          value: selfStat[20].parseFloat(),
-          timestamp: timestamp,
-        ),
-        Metric(
-          name: "process_resident_memory_bytes", # Resident memory size in bytes.
-          value: selfStat[21].parseFloat() * pagesize,
-          timestamp: timestamp,
-        ),
-        Metric(
-          name: "process_start_time_seconds", # Start time of the process since unix epoch in seconds.
-          value: selfStat[19].parseFloat() / ticks + btime,
-          timestamp: timestamp,
-        ),
-        Metric(
-          name: "process_cpu_seconds_total", # Total user and system CPU time spent in seconds.
-          value: (selfStat[11].parseFloat() + selfStat[12].parseFloat()) / ticks,
-          timestamp: timestamp,
-        ),
-      ]
+      output(
+        name = "process_virtual_memory_bytes", # Virtual memory size in bytes.
+        value = selfStat[20].parseFloat(),
+        timestamp = timestamp,
+      )
+
+      output(
+        name = "process_resident_memory_bytes", # Resident memory size in bytes.
+        value = selfStat[21].parseFloat() * pagesize,
+        timestamp = timestamp,
+      )
+      output(
+        name = "process_start_time_seconds",
+          # Start time of the process since unix epoch in seconds.
+        value = selfStat[19].parseFloat() / ticks + btime,
+        timestamp = timestamp,
+      )
+      output(
+        name = "process_cpu_seconds_total",
+          # Total user and system CPU time spent in seconds.
+        value = (selfStat[11].parseFloat() + selfStat[12].parseFloat()) / ticks,
+        timestamp = timestamp,
+      )
 
       for line in lines("/proc/self/limits"):
         if line.startsWith("Max open files"):
-          result[@[]].add(
-            Metric(
-              name: "process_max_fds", # Maximum number of open file descriptors.
-              value: line.splitWhitespace()[3].parseFloat(), # a simple `split()` does not combine adjacent whitespace
-              timestamp: timestamp,
-            )
+          output(
+            name = "process_max_fds", # Maximum number of open file descriptors.
+            value = line.splitWhitespace()[3].parseFloat(),
+              # a simple `split()` does not combine adjacent whitespace
+            timestamp = timestamp,
           )
           break
 
-      result[@[]].add(
-        Metric(
-          name: "process_open_fds", # Number of open file descriptors.
-          value: toSeq(walkDir("/proc/self/fd")).len.float64,
-          timestamp: timestamp,
-        )
+      output(
+        name = "process_open_fds", # Number of open file descriptors.
+        value = toSeq(walkDir("/proc/self/fd")).len.float64,
+        timestamp = timestamp,
       )
     except CatchableError as e:
       printError(e.msg)
@@ -1149,13 +1228,13 @@ when defined(metrics) and defined(linux):
 ####################
 
 when defined(metrics):
-  type NimRuntimeInfo = ref object of Gauge
-  var nimRuntimeInfo* {.global.} = NimRuntimeInfo.newCollector("nim_runtime_info", "Nim runtime info")
+  type NimRuntimeInfo = ref object of Collector
+  let
+    nimRuntimeInfo* {.global.} =
+      NimRuntimeInfo.newCollector("nim_runtime_info", "Nim runtime info")
 
-  method collect*(collector: NimRuntimeInfo): Metrics =
-    let timestamp = getTime().toMilliseconds()
-    result[@[]] = @[]
-
+  method collect*(collector: NimRuntimeInfo, output: MetricHandler) =
+    let timestamp = collector.now()
     try:
       when defined(nimTypeNames) and declared(dumpHeapInstances):
         # Too high cardinality causes performance issues in Prometheus.
@@ -1180,45 +1259,60 @@ when defined(metrics):
               smallest = i
           if not dedupe and data.sizes > heapSizes[smallest][1]:
             heapSizes[smallest] = (data.name, data.sizes)
-        sort(heapSizes, proc(a, b: auto): auto = b[1] - a[1])
+        sort(
+          heapSizes,
+          proc(a, b: auto): auto =
+              b[1] - a[1]
+            ,
+        )
         # Lower the number of metrics to reduce metric cardinality.
         for i in 0..<labelsLimit:
           let (typeName, size) = heapSizes[i]
-          result[@[]].add(
-            Metric(
-              name: "nim_gc_heap_instance_occupied_bytes", # total bytes occupied, by instance type (all threads)
-              value: size.float64,
-              timestamp: timestamp,
-              labels: @["type_name"],
-              labelValues: @[$typeName],
-            )
+          output(
+            name = "nim_gc_heap_instance_occupied_bytes",
+              # total bytes occupied, by instance type (all threads)
+            value = size.float64,
+            timestamp = timestamp,
+            labels = ["type_name"],
+            labelValues = [$typeName],
           )
-        result[@[]].add(
-          Metric(
-            name: "nim_gc_heap_instance_occupied_summed_bytes", # total bytes occupied by all instance types, in all threads - should be equal to 'sum(nim_gc_mem_occupied_bytes)' when 'updateThreadMetrics()' is being called in all threads, but it's somewhat smaller
-            value: heapSum.float64,
-            timestamp: timestamp,
-          )
+
+        output(
+          name = "nim_gc_heap_instance_occupied_summed_bytes",
+            # total bytes occupied by all instance types, in all threads - should be equal to 'sum(nim_gc_mem_occupied_bytes)' when 'updateThreadMetrics()' is being called in all threads, but it's somewhat smaller
+          value = heapSum.float64,
+          timestamp = timestamp,
         )
     except CatchableError as e:
       printError(e.msg)
 
-  declareGauge nim_gc_mem_bytes, "the number of bytes that are owned by a thread's GC", ["thread_id"]
-  declareGauge nim_gc_mem_occupied_bytes, "the number of bytes that are owned by a thread's GC and hold data", ["thread_id"]
+  declareGauge nim_gc_mem_bytes,
+    "the number of bytes that are owned by a thread's GC", ["thread_id"]
+  declareGauge nim_gc_mem_occupied_bytes,
+    "the number of bytes that are owned by a thread's GC and hold data", ["thread_id"]
 
   proc updateNimRuntimeInfoThread() =
     try:
       let threadID = getThreadId()
 
       when declared(getTotalMem):
-        nim_gc_mem_bytes.set(getTotalMem().float64, labelValues = @[$threadID], doUpdateSystemMetrics = false)
+        nim_gc_mem_bytes.set(
+          getTotalMem().float64,
+          labelValues = @[$threadID],
+          doUpdateSystemMetrics = false,
+        )
 
       when declared(getOccupiedMem):
-        nim_gc_mem_occupied_bytes.set(getOccupiedMem().float64, labelValues = @[$threadID], doUpdateSystemMetrics = false)
+        nim_gc_mem_occupied_bytes.set(
+          getOccupiedMem().float64,
+          labelValues = @[$threadID],
+          doUpdateSystemMetrics = false,
+        )
 
-      # TODO: parse the output of `GC_getStatistics()` for more stats
+        # TODO: parse the output of `GC_getStatistics()` for more stats
     except CatchableError as e:
       printError(e.msg)
 
-  threadMetricsUpdateProcs[threadMetricsUpdateProcsIndex] = updateNimRuntimeInfoThread
-  threadMetricsUpdateProcsIndex += 1
+  if threadMetricsUpdateProcsIndex < threadMetricsUpdateProcs.len:
+    threadMetricsUpdateProcs[threadMetricsUpdateProcsIndex] = updateNimRuntimeInfoThread
+    threadMetricsUpdateProcsIndex += 1

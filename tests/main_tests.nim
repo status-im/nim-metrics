@@ -5,7 +5,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import net, os, unittest2,
-      ../metrics
+      ../metrics, ../metrics/export_backend
 
 when defined(metrics):
   import times
@@ -101,7 +101,7 @@ suite "counter":
     check myCounter.value == 2
 
   test "labels":
-    declareCounter lCounter, "l help", @["foo", "bar"], registry
+    declareCounter lCounter, "l help", ["foo", "bar"], registry
     expect KeyError:
       discard lCounter.value
 
@@ -116,11 +116,11 @@ suite "counter":
 
     # label validation
     expect ValueError:
-      declareCounter invalid1, "invalid", @["123", "foo"]
+      declareCounter invalid1, "invalid", ["123", "foo"]
     expect ValueError:
-      declareCounter invalid2, "invalid", @["foo", "123"]
+      declareCounter invalid2, "invalid", ["foo", "123"]
     expect ValueError:
-      declareCounter invalid3, "invalid", @["foo", "__bar"]
+      declareCounter invalid3, "invalid", ["foo", "__bar"]
 
     # label names: array instead of sequence
     declareCounter lCounter2, "l2 help", ["foo", "bar"], registry
@@ -348,25 +348,33 @@ when defined(metrics):
     registry2 = newRegistry()
     myCustomCollector2 = MyCustomCollector.newCollector("my_custom_collector2", "help2", registry = registry2)
 
-  method collect(collector: MyCustomCollector): Metrics =
-    let timestamp = getTime().toMilliseconds()
-    result[@[]] = @[
-      Metric(
-        name: "custom_metric",
-        value: 42,
-        timestamp: timestamp,
-      )
-    ]
+  method collect(collector: MyCustomCollector, output: MetricHandler) =
+    let timestamp = collector.now()
+    output(
+      name = "custom_metric",
+      value = 42,
+      timestamp = timestamp,
+    )
+
 
   suite "custom collectors":
     test "42":
       check myCustomCollector.value == 42
 
     test "custom registry":
-      let collectors = registry2.collect()
-      check collectors.len == 1
-      for collector, metrics in collectors:
-        check collector.value == 42
+      var metrics: seq[float64]
+      proc output(
+        name: string,
+        value: float64,
+        labels, labelValues: openArray[string],
+        timestamp: Time,
+      ) =
+        metrics.add(value)
+
+      registry2.collect(output)
+      check:
+        metrics.len == 1
+        metrics[0] == 42
 
 suite "system metrics":
   test "change update interval":
