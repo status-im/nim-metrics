@@ -536,30 +536,28 @@ when defined(metrics):
       result.metricKeys[LabelKey.init(labels)] = result.metrics.high()
 
   proc incCounter(counter: Counter, amount: float64, labelValues: openArray[string]) =
-    when defined(metrics):
-      let timestamp = counter.now()
+    if amount < 0:
+      printError(
+        "Counter.inc() cannot be used with negative amounts: " & $counter.name & "=" &
+          $amount
+      )
+      return
 
-      if amount < 0:
-        printError(
-          "Counter.inc() cannot be used with negative amounts: " & $counter.name & "=" &
-            $amount
-        )
-        return
+    let timestamp = counter.now()
+    withLabelValues(counter, labelValues, valueSym):
+      valueSym[0].value += amount
+      valueSym[0].timestamp = timestamp
 
-      withLabelValues(counter, labelValues, valueSym):
-        valueSym[0].value += amount
-        valueSym[0].timestamp = timestamp
-
-        pushMetrics(
-          name = counter.name,
-          value = valueSym[0].value,
-          increment = amount,
-          metricType = "c",
-          timestamp = timestamp,
-          sampleRate = counter.sampleRate,
-        )
-      do:
-        newCounterMetrics(counter.name, counter.labels, labelValues)
+      pushMetrics(
+        name = counter.name,
+        value = valueSym[0].value,
+        increment = amount,
+        metricType = "c",
+        timestamp = timestamp,
+        sampleRate = counter.sampleRate,
+      )
+    do:
+      newCounterMetrics(counter.name, counter.labels, labelValues)
 
 template declareCounter*(
     identifier: untyped,
@@ -706,20 +704,19 @@ when defined(metrics):
       result.metricKeys[LabelKey.init(labels)] = result.metrics.high()
 
   proc incGauge(gauge: Gauge, amount: float64, labelValues: openArray[string]) =
-    when defined(metrics):
-      let timestamp = gauge.now()
+    let timestamp = gauge.now()
 
-      withLabelValues(gauge, labelValues, valueSym):
-        valueSym[0].value += amount
-        valueSym[0].timestamp = timestamp
-        pushMetrics(
-          name = gauge.name,
-          value = valueSym[0].value,
-          metricType = "g",
-          timestamp = timestamp,
-        )
-      do:
-        newGaugeMetrics(gauge.name, gauge.labels, labelValues)
+    withLabelValues(gauge, labelValues, valueSym):
+      valueSym[0].value += amount
+      valueSym[0].timestamp = timestamp
+      pushMetrics(
+        name = gauge.name,
+        value = valueSym[0].value,
+        metricType = "g",
+        timestamp = timestamp,
+      )
+    do:
+      newGaugeMetrics(gauge.name, gauge.labels, labelValues)
 
   proc setGauge(
       gauge: Gauge,
@@ -727,22 +724,21 @@ when defined(metrics):
       labelValues: openArray[string],
       doUpdateSystemMetrics: bool,
   ) =
-    when defined(metrics):
-      let timestamp = gauge.now()
+    let timestamp = gauge.now()
 
-      withLabelValues(gauge, labelValues, valueSym):
-        valueSym[0].value = value.float64
-        if gauge.timestamp:
-          valueSym[0].timestamp = getTime()
-        pushMetrics(
-          name = gauge.name,
-          value = value.float64,
-          metricType = "g",
-          timestamp = timestamp,
-          doUpdateSystemMetrics = doUpdateSystemMetrics,
-        )
-      do:
-        newGaugeMetrics(gauge.name, gauge.labels, labelValues)
+    withLabelValues(gauge, labelValues, valueSym):
+      valueSym[0].value = value.float64
+      if gauge.timestamp:
+        valueSym[0].timestamp = getTime()
+      pushMetrics(
+        name = gauge.name,
+        value = value.float64,
+        metricType = "g",
+        timestamp = timestamp,
+        doUpdateSystemMetrics = doUpdateSystemMetrics,
+      )
+    do:
+      newGaugeMetrics(gauge.name, gauge.labels, labelValues)
 
 template declareGauge*(
     identifier: untyped,
@@ -888,16 +884,15 @@ when defined(metrics):
       result.metricKeys[LabelKey.init(labels)] = result.metrics.high()
 
   proc observeSummary(summary: Summary, amount: float64, labelValues: openArray[string]) =
-    when defined(metrics):
-      let timestamp = summary.now()
+    let timestamp = summary.now()
 
-      withLabelValues(summary, labelValues, valueSym):
-        valueSym[0].value += amount # _sum
-        valueSym[0].timestamp = timestamp
-        valueSym[1].value += 1.float64 # _count
-        valueSym[1].timestamp = timestamp
-      do:
-        newSummaryMetrics(summary.name, summary.labels, labelValues)
+    withLabelValues(summary, labelValues, valueSym):
+      valueSym[0].value += amount # _sum
+      valueSym[0].timestamp = timestamp
+      valueSym[1].value += 1.float64 # _count
+      valueSym[1].timestamp = timestamp
+    do:
+      newSummaryMetrics(summary.name, summary.labels, labelValues)
 
 template declareSummary*(
     identifier: untyped,
@@ -963,8 +958,8 @@ template time*(
 # histogram #
 #############
 
-let
-  defaultHistogramBuckets* {.global.} = [
+const
+  defaultHistogramBuckets* = [
     0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, Inf
   ]
 when defined(metrics):
@@ -1027,24 +1022,23 @@ when defined(metrics):
   proc observeHistogram(
       histogram: Histogram, amount: float64, labelValues: openArray[string]
   ) =
-    when defined(metrics):
-      let timestamp = histogram.now()
-      withLabelValues(histogram, labelValues, valueSym):
-        valueSym[0].value += amount # _sum
-        valueSym[0].timestamp = timestamp
-        valueSym[1].value += 1.float64 # _count
-        valueSym[1].timestamp = timestamp
-        for i, bucket in histogram.buckets:
-          if amount.float64 <= bucket:
-            #- "le" probably stands for "less or equal"
-            #- the same observed value can increase multiple buckets, because this is
-            #  a cumulative histogram
-            valueSym[i + 3].value += 1.float64 # _bucket{le="<bucket value>"}
-            valueSym[i + 3].timestamp = timestamp
-      do:
-        newHistogramMetrics(
-          histogram.name, histogram.labels, labelValues, histogram.buckets
-        )
+    let timestamp = histogram.now()
+    withLabelValues(histogram, labelValues, valueSym):
+      valueSym[0].value += amount # _sum
+      valueSym[0].timestamp = timestamp
+      valueSym[1].value += 1.float64 # _count
+      valueSym[1].timestamp = timestamp
+      for i, bucket in histogram.buckets:
+        if amount.float64 <= bucket:
+          #- "le" probably stands for "less or equal"
+          #- the same observed value can increase multiple buckets, because this is
+          #  a cumulative histogram
+          valueSym[i + 3].value += 1.float64 # _bucket{le="<bucket value>"}
+          valueSym[i + 3].timestamp = timestamp
+    do:
+      newHistogramMetrics(
+        histogram.name, histogram.labels, labelValues, histogram.buckets
+      )
 
 template declareHistogram*(
     identifier: untyped,
