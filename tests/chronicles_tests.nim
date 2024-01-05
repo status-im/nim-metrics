@@ -7,9 +7,6 @@
 import chronicles, unittest2,
       ../metrics, ../metrics/chronicles_support
 
-when defined(metrics):
-  import tables
-
 suite "logging":
   test "info":
     var registry = newRegistry()
@@ -29,11 +26,6 @@ suite "logging":
     declareHistogram myHistogram, "help", registry = registry
     myHistogram.observe(10)
     info "myHistogram", myHistogram
-    when defined(metrics):
-      for collector, metricsTable in registry.collect():
-        for labels, metrics in metricsTable:
-          for metric in metrics:
-            info "metric", metric
+
     info "registry", registry
     info "default registry", defaultRegistry
-

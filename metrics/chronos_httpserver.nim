@@ -21,7 +21,9 @@ type
   MetricsError* = object of CatchableError
 
   MetricsHttpServerStatus* {.pure.} = enum
-    Closed, Running, Stopped
+    Closed
+    Running
+    Stopped
 
   MetricsServerData = object
     when defined(metrics):
@@ -54,7 +56,7 @@ when defined(metrics):
             {.gcsafe.}:
               # Prometheus will drop our metrics in surprising ways if we give
               # it timestamps, so we don't.
-              let response = defaultRegistry.toText(showTimestamp = false)
+              let response = defaultRegistry.toText()
               let headers = HttpTable.init([("Content-Type", CONTENT_TYPE)])
               return await request.respond(Http200, response, headers)
           elif request.uri.path == "/health":
@@ -85,7 +87,10 @@ when defined(metrics):
 
   type
     MetricsRequest {.pure.} = enum
-      Status, Start, Stop, Close
+      Status
+      Start
+      Stop
+      Close
 
     MetricsResponse = object
       status: byte
@@ -97,19 +102,22 @@ when defined(metrics):
       http: HttpServerRef
 
     MetricsErrorKind {.pure.} = enum
-      Timeout, Transport, Communication
+      Timeout
+      Transport
+      Communication
 
-  proc raiseMetricsError(msg: string, exc: ref Exception) {.
-       noreturn, noinit, raises: [MetricsError].} =
+  proc raiseMetricsError(
+      msg: string, exc: ref Exception
+  ) {.noreturn, noinit, raises: [MetricsError].} =
     let message = msg & ", reason: [" & $exc.name & "]: " & $exc.msg
     raise (ref MetricsError)(msg: message, parent: exc)
 
-  proc raiseMetricsError(msg: string) {.
-       noreturn, noinit, raises: [MetricsError].} =
+  proc raiseMetricsError(msg: string) {.noreturn, noinit, raises: [MetricsError].} =
     raise (ref MetricsError)(msg: msg)
 
-  proc raiseMetricsError(msg: MetricsErrorKind, exc: ref Exception) {.
-       noreturn, noinit, raises: [MetricsError].} =
+  proc raiseMetricsError(
+      msg: MetricsErrorKind, exc: ref Exception
+  ) {.noreturn, noinit, raises: [MetricsError].} =
     case msg
     of MetricsErrorKind.Timeout:
       raiseMetricsError("Connection with metrics thread timed out", exc)
@@ -118,10 +126,10 @@ when defined(metrics):
     of MetricsErrorKind.Communication:
       raiseMetricsError("Communication with metrics thread failed", exc)
 
-  proc raiseMetricsError*(msg: string, err: OSErrorCode) {.
-       noreturn, noinit, raises: [MetricsError].} =
-    let message = msg & ", reason: [OSError]: (" & $int(err) & ") " &
-                  osErrorMsg(err)
+  proc raiseMetricsError*(
+      msg: string, err: OSErrorCode
+  ) {.noreturn, noinit, raises: [MetricsError].} =
+    let message = msg & ", reason: [OSError]: (" & $int(err) & ") " & osErrorMsg(err)
     raise (ref MetricsError)(msg: message)
 
   proc respond(m: MetricsThreadData, mtype: byte, message: string) {.async.} =
@@ -135,8 +143,9 @@ when defined(metrics):
     if res != len(buffer):
       raiseMetricsError("Incomplete response has been sent")
 
-  proc communicate(m: MetricsHttpServerRef,
-                   req: MetricsRequest): Future[MetricsResponse] {.async.} =
+  proc communicate(
+      m: MetricsHttpServerRef, req: MetricsRequest
+  ): Future[MetricsResponse] {.async.} =
     var buffer: array[MessageSize + 1, byte]
     buffer[0] = byte(req)
     block:
@@ -150,15 +159,16 @@ when defined(metrics):
 
   proc getMessage(m: MetricsResponse): string =
     var res = newStringOfCap(MessageSize + 1)
-    for i in 0 ..< len(m.data):
+    for i in 0..<len(m.data):
       let ch = m.data[i]
       if ch == 0x00'u8:
         break
       res.add(char(ch))
     res
 
-  proc asyncStep(server: MetricsServerData, data: MetricsThreadData,
-                 lastError: string): Future[bool] {.async.} =
+  proc asyncStep(
+      server: MetricsServerData, data: MetricsThreadData, lastError: string
+  ): Future[bool] {.async.} =
     var buffer: array[1, byte]
     try:
       await data.reqTransp.readExactly(addr buffer[0], len(buffer))
@@ -171,23 +181,21 @@ when defined(metrics):
         await data.respond(ResponseError, "HTTP server is not bound!")
         return true
 
-      return
-        case buffer[0]
+      return case buffer[0]
         of byte(MetricsRequest.Status):
-          let message =
-            case data.http.state()
-            of ServerStopped: "STOPPED"
-            of ServerClosed: "CLOSED"
-            of ServerRunning: "RUNNING"
+          let
+            message =
+              case data.http.state()
+              of ServerStopped: "STOPPED"
+              of ServerClosed: "CLOSED"
+              of ServerRunning: "RUNNING"
           await data.respond(ResponseOk, message)
           true
         of byte(MetricsRequest.Start):
           if data.http.state() != HttpServerState.ServerStopped:
-            let message =
-              if data.http.state() == HttpServerState.ServerClosed:
-                "HTTP server is already closed"
-              else:
-                "HTTP server is already running"
+            let
+              message =
+                if data.http.state() == HttpServerState.ServerClosed: "HTTP server is already closed" else: "HTTP server is already running"
             await data.respond(ResponseError, message)
           else:
             data.http.start()
@@ -195,11 +203,9 @@ when defined(metrics):
           true
         of byte(MetricsRequest.Stop):
           if data.http.state() != HttpServerState.ServerRunning:
-            let message =
-              if data.http.state() == HttpServerState.ServerClosed:
-                "HTTP server is already closed"
-              else:
-                "HTTP server is already stopped"
+            let
+              message =
+                if data.http.state() == HttpServerState.ServerClosed: "HTTP server is already closed" else: "HTTP server is already stopped"
             await data.respond(ResponseError, message)
           else:
             await data.http.stop()
@@ -215,7 +221,7 @@ when defined(metrics):
             false
     except CatchableError as exc:
       printError(exc.msg)
-      if not(isNil(data.http)):
+      if not (isNil(data.http)):
         await data.http.closeWait()
       return false
 
@@ -230,7 +236,7 @@ when defined(metrics):
             {.gcsafe.}:
               # Prometheus will drop our metrics in surprising ways if we give
               # it timestamps, so we don't.
-              let response = defaultRegistry.toText(showTimestamp = false)
+              let response = defaultRegistry.toText()
               let headers = HttpTable.init([("Content-Type", CONTENT_TYPE)])
               return await request.respond(Http200, response, headers)
           elif request.uri.path == "/health":
@@ -244,8 +250,7 @@ when defined(metrics):
       http =
         block:
           let socketFlags = {ServerFlags.ReuseAddr}
-          let res = HttpServerRef.new(server.address, cb,
-                                      socketFlags = socketFlags)
+          let res = HttpServerRef.new(server.address, cb, socketFlags = socketFlags)
           if res.isErr():
             lastError = res.error()
             nil
@@ -264,12 +269,12 @@ when defined(metrics):
           await http.closeWait()
           await reqTransp.closeWait()
           return
-      threadData = MetricsThreadData(
-        reqTransp: reqTransp, respTransp: respTransp, http: http)
+      threadData =
+        MetricsThreadData(reqTransp: reqTransp, respTransp: respTransp, http: http)
 
     while true:
       let res = await asyncStep(server, threadData, lastError)
-      if not(res):
+      if not (res):
         break
 
     await allFutures(reqTransp.closeWait(), respTransp.closeWait())
@@ -282,15 +287,15 @@ when defined(metrics):
     except Exception as exc:
       printError($exc.msg)
 
-proc startMetricsHttpServer*(address = "127.0.0.1", port = Port(8000)) {.
-     raises: [Exception],
-     deprecated: "Please use MetricsHttpServerRef API".} =
+proc startMetricsHttpServer*(
+    address = "127.0.0.1", port = Port(8000)
+) {.raises: [Exception], deprecated: "Please use MetricsHttpServerRef API".} =
   when defined(metrics):
     httpServerThread.createThread(serveHttp, initTAddress(address, port))
 
-proc new*(t: typedesc[MetricsHttpServerRef], address: string,
-          port: Port): Result[MetricsHttpServerRef, cstring] {.
-     raises: [].} =
+proc new*(
+    t: typedesc[MetricsHttpServerRef], address: string, port: Port
+): Result[MetricsHttpServerRef, cstring] {.raises: [].} =
   ## Initialize new instance of MetricsHttpServerRef.
   ##
   ## This involves creation of new thread and new processing loop in the new
@@ -299,6 +304,7 @@ proc new*(t: typedesc[MetricsHttpServerRef], address: string,
     template closePipe(b: untyped): untyped =
       closeHandle(b.read)
       closeHandle(b.write)
+
     let
       taddress =
         try:
@@ -314,7 +320,8 @@ proc new*(t: typedesc[MetricsHttpServerRef], address: string,
           res
       cleanupRequest = true
     defer:
-      if cleanupRequest: request.closePipe()
+      if cleanupRequest:
+        request.closePipe()
 
     var
       response =
@@ -326,10 +333,14 @@ proc new*(t: typedesc[MetricsHttpServerRef], address: string,
           res
       cleanupResponse = true
     defer:
-      if cleanupResponse: response.closePipe()
+      if cleanupResponse:
+        response.closePipe()
 
-    let data = MetricsServerData(address: taddress, requestPipe: request,
-                               responsePipe: response)
+    let
+      data =
+        MetricsServerData(
+          address: taddress, requestPipe: request, responsePipe: response
+        )
     var server = MetricsHttpServerRef(data: data)
     try:
       createThread(server.thread, serveMetricsServer, data)
@@ -342,14 +353,16 @@ proc new*(t: typedesc[MetricsHttpServerRef], address: string,
       try:
         fromPipe(request.write)
       except CatchableError:
-        return err("Unable to establish communication channel with " &
-                   "metrics server thread")
+        return err(
+            "Unable to establish communication channel with " & "metrics server thread"
+          )
     server.respTransp =
       try:
         fromPipe(response.read)
       except CatchableError:
-        return err("Unable to establish communication channel with " &
-                   "metrics server thread")
+        return err(
+            "Unable to establish communication channel with " & "metrics server thread"
+          )
 
     cleanupRequest = false
     cleanupResponse = false
@@ -360,82 +373,83 @@ proc new*(t: typedesc[MetricsHttpServerRef], address: string,
 proc start*(server: MetricsHttpServerRef) {.async.} =
   ## Start metrics HTTP server.
   when defined(metrics):
-    if not(server.thread.running()):
+    if not (server.thread.running()):
       raiseMetricsError("Metrics server is not running")
-    let resp =
-      try:
-        await communicate(server, MetricsRequest.Start).wait(5.seconds)
-      except AsyncTimeoutError as exc:
-        raiseMetricsError(MetricsErrorKind.Timeout, exc)
-      except MetricsError as exc:
-        raiseMetricsError(MetricsErrorKind.Communication, exc)
-      except TransportError as exc:
-        raiseMetricsError(MetricsErrorKind.Transport, exc)
+    let
+      resp =
+        try:
+          await communicate(server, MetricsRequest.Start).wait(5.seconds)
+        except AsyncTimeoutError as exc:
+          raiseMetricsError(MetricsErrorKind.Timeout, exc)
+        except MetricsError as exc:
+          raiseMetricsError(MetricsErrorKind.Communication, exc)
+        except TransportError as exc:
+          raiseMetricsError(MetricsErrorKind.Transport, exc)
     if resp.status != 0x00'u8:
       raiseMetricsError("Metrics server returns an error: " & resp.getMessage())
 
 proc stop*(server: MetricsHttpServerRef) {.async.} =
   ## Force metrics HTTP server to stop accepting new connections.
   when defined(metrics):
-    if not(server.thread.running()):
+    if not (server.thread.running()):
       raiseMetricsError("Metrics server is not running")
-    let resp =
-      try:
-        await communicate(server, MetricsRequest.Stop).wait(5.seconds)
-      except AsyncTimeoutError as exc:
-        raiseMetricsError(MetricsErrorKind.Timeout, exc)
-      except MetricsError as exc:
-        raiseMetricsError(MetricsErrorKind.Communication, exc)
-      except TransportError as exc:
-        raiseMetricsError(MetricsErrorKind.Transport, exc)
+    let
+      resp =
+        try:
+          await communicate(server, MetricsRequest.Stop).wait(5.seconds)
+        except AsyncTimeoutError as exc:
+          raiseMetricsError(MetricsErrorKind.Timeout, exc)
+        except MetricsError as exc:
+          raiseMetricsError(MetricsErrorKind.Communication, exc)
+        except TransportError as exc:
+          raiseMetricsError(MetricsErrorKind.Transport, exc)
     if resp.status != 0x00'u8:
       raiseMetricsError("Metrics server returns an error: " & resp.getMessage())
 
 proc close*(server: MetricsHttpServerRef) {.async.} =
   ## Close metrics HTTP server and release all the resources.
   when defined(metrics):
-    if not(server.thread.running()):
+    if not (server.thread.running()):
       raiseMetricsError("Metrics server is not running")
-    let resp =
-      try:
-        await communicate(server, MetricsRequest.Close).wait(5.seconds)
-      except AsyncTimeoutError as exc:
-        raiseMetricsError(MetricsErrorKind.Timeout, exc)
-      except MetricsError as exc:
-        raiseMetricsError(MetricsErrorKind.Communication, exc)
-      except TransportError as exc:
-        raiseMetricsError(MetricsErrorKind.Transport, exc)
+    let
+      resp =
+        try:
+          await communicate(server, MetricsRequest.Close).wait(5.seconds)
+        except AsyncTimeoutError as exc:
+          raiseMetricsError(MetricsErrorKind.Timeout, exc)
+        except MetricsError as exc:
+          raiseMetricsError(MetricsErrorKind.Communication, exc)
+        except TransportError as exc:
+          raiseMetricsError(MetricsErrorKind.Transport, exc)
     if resp.status != 0x00'u8:
       raiseMetricsError("Metrics server returns an error: " & resp.getMessage())
     # Closing pipes, other pipe ends should be closed by foreign thread.
-    await allFutures(server.reqTransp.closeWait(),
-                     server.respTransp.closeWait())
+    await allFutures(server.reqTransp.closeWait(), server.respTransp.closeWait())
     # Thread should exit very soon.
     server.thread.joinThread()
 
-proc status*(server: MetricsHttpServerRef): Future[MetricsHttpServerStatus] {.
-     async.} =
+proc status*(server: MetricsHttpServerRef): Future[MetricsHttpServerStatus] {.async.} =
   ## Returns current status of metrics HTTP server.
   ##
   ## Note, that if `metrics` variable is not defined this procedure will return
   ## ``MetricsHttpServerStatus.Closed``.
   when defined(metrics):
-    if not(server.thread.running()):
+    if not (server.thread.running()):
       return MetricsHttpServerStatus.Closed
-    let resp =
-      try:
-        await communicate(server, MetricsRequest.Status).wait(5.seconds)
-      except AsyncTimeoutError as exc:
-        raiseMetricsError(MetricsErrorKind.Timeout, exc)
-      except MetricsError as exc:
-        raiseMetricsError(MetricsErrorKind.Communication, exc)
-      except TransportError as exc:
-        raiseMetricsError(MetricsErrorKind.Transport, exc)
+    let
+      resp =
+        try:
+          await communicate(server, MetricsRequest.Status).wait(5.seconds)
+        except AsyncTimeoutError as exc:
+          raiseMetricsError(MetricsErrorKind.Timeout, exc)
+        except MetricsError as exc:
+          raiseMetricsError(MetricsErrorKind.Communication, exc)
+        except TransportError as exc:
+          raiseMetricsError(MetricsErrorKind.Transport, exc)
     if resp.status != 0x00'u8:
       raiseMetricsError("Metrics server returns an error: " & resp.getMessage())
     let msg = resp.getMessage()
-    return
-      case msg
+    return case msg
       of "STOPPED":
         MetricsHttpServerStatus.Stopped
       of "CLOSED":
