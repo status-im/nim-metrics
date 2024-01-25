@@ -158,3 +158,10 @@ jobs:
           nimble install -y unittest2
           env NIMFLAGS="${NIMFLAGS} --mm:refc" nimble test
           env NIMFLAGS="${NIMFLAGS} --mm:refc" nimble test_chronicles
+  
+      - name: Run ORC tests for the devel branch
+        if: matrix.branch == 'devel'
+        run: |
+          env NIMFLAGS="${NIMFLAGS} --mm:orc" nimble test
+          env NIMFLAGS="${NIMFLAGS} --mm:orc" nimble test_chronicles
+      
