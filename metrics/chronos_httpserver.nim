@@ -506,15 +506,19 @@ proc new*(
       let request = reqfence.get()
       try:
         if request.uri.path == "/metrics":
-          # Prometheus will drop our metrics in surprising ways if we give
-          # it timestamps, so we don't.
-          let
-            response =
-              block:
-                {.gcsafe.}:
-                  defaultRegistry.toText()
-            headers = HttpTable.init([("Content-Type", CONTENT_TYPE)])
-          await request.respond(Http200, response, headers)
+          when defined(metrics):
+            # Prometheus will drop our metrics in surprising ways if we give
+            # it timestamps, so we don't.
+            let
+              response =
+                block:
+                  {.gcsafe.}:
+                    defaultRegistry.toText()
+              headers = HttpTable.init([("Content-Type", CONTENT_TYPE)])
+            await request.respond(Http200, response, headers)
+          else:
+            await request.respond(Http200,
+              "Metrics are not enabled, build your application with -d:metrics")
         elif request.uri.path == "/health":
           await request.respond(Http200, "OK")
         else:
