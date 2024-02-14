@@ -17,10 +17,10 @@ when defined(metricsTest):
 else:
   {.pragma: testOnly, deprecated: "slow helpers used for tests only".}
 
-import std/[locks, os, sets, tables, times, sequtils]
+import std/[locks, os, sets, tables, times]
 
 when defined(metrics):
-  import std/[algorithm, hashes, strutils], stew/ptrops, metrics/common
+  import std/[algorithm, hashes, strutils, sequtils], stew/ptrops, metrics/common
 
   export tables # for custom collectors that need to work with the "Metrics" type
 
@@ -295,12 +295,12 @@ when defined(metrics):
 proc `$`*(collector: type IgnoredCollector): string =
   ""
 
-template value*(
-    collector: Collector | type IgnoredCollector,
-    labelValuesParam: openArray[string] = [],
-): float64 {.testOnly.} =
-  var res = NaN
-  when defined(metrics) and collector is not IgnoredCollector:
+when defined(metrics):
+  proc valueImpl*(
+      collector: Collector,
+      labelValuesParam: openArray[string] = [],
+  ): float64 {.gcsafe, raises: [KeyError].} =
+    var res = NaN
     # Don't access the "metrics" field directly, so we can support custom
     # collectors.
     {.gcsafe.}:
@@ -309,20 +309,28 @@ template value*(
           name: string,
           value: float64,
           labels, labelValues: openArray[string],
-          timestamp: Time) {.gcsafe, raises: [].} =
+          timestamp: Time) =
         if res != res and labelValues == lv:
           res = value
 
-      collect(collector, MetricHandler(findMetric))
+      collect(collector, findMetric)
       if res != res: # NaN
         raise newException(
             KeyError,
             "No such metric for this collector (label values = " & $(@labelValuesParam) &
               ").",
-          )
+              )
+    res
+
+template value*(
+    collector: Collector | type IgnoredCollector,
+    labelValuesParam: openArray[string] = [],
+): float64 {.testOnly.} =
+  when defined(metrics) and collector is not IgnoredCollector:
+    {.gcsafe.}:
+      valueImpl(collector, labelValuesParam)
   else:
-    res = 0.0
-  res
+    0.0'f64
 
 proc valueByNameInternal*(
     collector: Collector | type IgnoredCollector,
