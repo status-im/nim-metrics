@@ -166,6 +166,9 @@ suite "gauge":
     myGauge.set(1)
     check myGauge.value == 1
 
+  test "GlobalGauge value":
+    check globalGauge.value == 0.0
+
   test "alternative API":
     gauge("one_off_gauge").set(1)
     check gauge("one_off_gauge").value == 1

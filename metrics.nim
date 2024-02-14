@@ -309,12 +309,11 @@ template value*(
           name: string,
           value: float64,
           labels, labelValues: openArray[string],
-          timestamp: Time,
-      ) =
+          timestamp: Time) {.gcsafe, raises: [].} =
         if res != res and labelValues == lv:
           res = value
 
-      collect(collector, findMetric)
+      collect(collector, MetricHandler(findMetric))
       if res != res: # NaN
         raise newException(
             KeyError,
