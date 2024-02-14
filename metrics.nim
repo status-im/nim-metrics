@@ -17,10 +17,10 @@ when defined(metricsTest):
 else:
   {.pragma: testOnly, deprecated: "slow helpers used for tests only".}
 
-import std/[locks, os, sets, tables, times]
+import std/[locks, os, sets, tables, times, sequtils]
 
 when defined(metrics):
-  import std/[algorithm, hashes, sequtils, strutils], stew/ptrops, metrics/common
+  import std/[algorithm, hashes, strutils], stew/ptrops, metrics/common
 
   export tables # for custom collectors that need to work with the "Metrics" type
 
