@@ -111,18 +111,18 @@ when defined(metrics):
 
   proc raiseMetricsError(
       msg: string, exc: ref Exception
-  ) {.noreturn, noinit, raises: [MetricsError].} =
+  ) {.noreturn, noinline, raises: [MetricsError].} =
     let message = msg & ", reason: [" & $exc.name & "]: " & $exc.msg
     raise (ref MetricsError)(msg: message, parent: exc)
 
   proc raiseMetricsError(
       msg: string
-  ) {.noreturn, noinit, raises: [MetricsError].} =
+  ) {.noreturn, noinline, raises: [MetricsError].} =
     raise (ref MetricsError)(msg: msg)
 
   proc raiseMetricsError(
       msg: MetricsErrorKind, exc: ref Exception
-  ) {.noreturn, noinit, raises: [MetricsError].} =
+  ) {.noreturn, noinline, raises: [MetricsError].} =
     case msg
     of MetricsErrorKind.Timeout:
       raiseMetricsError("Connection with metrics thread timed out", exc)
@@ -133,7 +133,7 @@ when defined(metrics):
 
   proc raiseMetricsError*(
       msg: string, err: OSErrorCode
-  ) {.noreturn, noinit, raises: [MetricsError].} =
+  ) {.noreturn, noinline, raises: [MetricsError].} =
     let message =
       msg & ", reason: [OSError]: (" & $int(err) & ") " & osErrorMsg(err)
     raise (ref MetricsError)(msg: message)
