@@ -17,7 +17,7 @@ when defined(metricsTest):
 else:
   {.pragma: testOnly, deprecated: "slow helpers used for tests only".}
 
-import std/[locks, os, sets, tables, times]
+import std/[locks, monotimes, os, sets, tables, times]
 
 when defined(metrics):
   import std/[algorithm, hashes, strutils, sequtils], stew/ptrops, metrics/common
@@ -1116,7 +1116,7 @@ when defined(metrics):
     threadMetricsUpdateProcs: array[metrics_max_hooks, ThreadMetricsUpdateProc]
     threadMetricsUpdateProcsIndex = 0
     systemMetricsUpdateInterval = initDuration(seconds = 10)
-    systemMetricsLastUpdated = now()
+    systemMetricsLastUpdated = getMonoTime()
 
   proc getSystemMetricsUpdateInterval*(): Duration =
     return systemMetricsUpdateInterval
@@ -1135,7 +1135,7 @@ when defined(metrics):
       # Update system metrics if at least systemMetricsUpdateInterval seconds
       # have passed and if we are being called from the main thread.
       if getThreadId() == mainThreadID:
-        let currTime = now()
+        let currTime = getMonoTime()
         if currTime >= (systemMetricsLastUpdated + systemMetricsUpdateInterval):
           systemMetricsLastUpdated = currTime
           # Update thread metrics, only when automation is on and we're in the
