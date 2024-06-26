@@ -13,7 +13,7 @@
 when defined(nimHasUsed):
   {.used.}
 
-import stew/results
+import results
 import chronos, chronos/apps/http/httpserver
 export chronos, results
 
