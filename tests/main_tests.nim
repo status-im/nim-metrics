@@ -58,21 +58,22 @@ suite "counter":
       expect ValueError:
         var tmp = newCounter("1337", "invalid name")
 
-  test "alternative API":
-    counter("one_off_counter").inc()
-    check counter("one_off_counter").value == 1
-    counter("one_off_counter").inc(0.5)
-    check counter("one_off_counter").value == 1.5
+  when not defined(noAlter):
+    test "alternative API":
+      counter("one_off_counter").inc()
+      check counter("one_off_counter").value == 1
+      counter("one_off_counter").inc(0.5)
+      check counter("one_off_counter").value == 1.5
 
-    # # Can't have different collector types with the same name, but unittest
-    # # can't catch an exception raised in the assignment to a {.global.}
-    # # variable.
-    # expect RegistrationError:
-      # check gauge("one_off_counter").value == 0
+      # # Can't have different collector types with the same name, but unittest
+      # # can't catch an exception raised in the assignment to a {.global.}
+      # # variable.
+      # expect RegistrationError:
+        # check gauge("one_off_counter").value == 0
 
-    # colons in name
-    counter("one:off:counter:colons").inc()
-    check counter("one:off:counter:colons").value == 1
+      # colons in name
+      counter("one:off:counter:colons").inc()
+      check counter("one:off:counter:colons").value == 1
 
   test "exceptions":
     proc f(switch: bool) =
@@ -169,11 +170,12 @@ suite "gauge":
   test "GlobalGauge value":
     check globalGauge.value == 0.0
 
-  test "alternative API":
-    gauge("one_off_gauge").set(1)
-    check gauge("one_off_gauge").value == 1
-    gauge("one_off_gauge").inc(0.5)
-    check gauge("one_off_gauge").value == 1.5
+  when not defined(noAlter):
+    test "alternative API":
+      gauge("one_off_gauge").set(1)
+      check gauge("one_off_gauge").value == 1
+      gauge("one_off_gauge").inc(0.5)
+      check gauge("one_off_gauge").value == 1.5
 
   test "in progress":
     myGauge.trackInProgress:
@@ -223,10 +225,11 @@ suite "summary":
     check mySummary.valueByName("mySummary_count") == 2
     check mySummary.valueByName("mySummary_sum") == 10.5
 
-  test "alternative API":
-    summary("one_off_summary").observe(10)
-    check summary("one_off_summary").valueByName("one_off_summary_count") == 1
-    check summary("one_off_summary").valueByName("one_off_summary_sum") == 10
+  when not defined(noAlter):
+    test "alternative API":
+      summary("one_off_summary").observe(10)
+      check summary("one_off_summary").valueByName("one_off_summary_count") == 1
+      check summary("one_off_summary").valueByName("one_off_summary_sum") == 10
 
   test "timing":
     mySummary.time:
@@ -304,14 +307,15 @@ suite "histogram":
     expect ValueError:
       declareHistogram h3, "help", registry = registry, buckets = [3.0, 1.0]
 
-  test "alternative API":
-    histogram("one_off_histogram").observe(2)
-    check histogram("one_off_histogram").valueByName("one_off_histogram_bucket", [], ["1.0"]) == 0
-    check histogram("one_off_histogram").valueByName("one_off_histogram_bucket", [], ["2.5"]) == 1
-    check histogram("one_off_histogram").valueByName("one_off_histogram_bucket", [], ["5.0"]) == 1
-    check histogram("one_off_histogram").valueByName("one_off_histogram_bucket", [], ["+Inf"]) == 1
-    check histogram("one_off_histogram").valueByName("one_off_histogram_count") == 1
-    check histogram("one_off_histogram").valueByName("one_off_histogram_sum") == 2
+  when not defined(noAlter):
+    test "alternative API":
+      histogram("one_off_histogram").observe(2)
+      check histogram("one_off_histogram").valueByName("one_off_histogram_bucket", [], ["1.0"]) == 0
+      check histogram("one_off_histogram").valueByName("one_off_histogram_bucket", [], ["2.5"]) == 1
+      check histogram("one_off_histogram").valueByName("one_off_histogram_bucket", [], ["5.0"]) == 1
+      check histogram("one_off_histogram").valueByName("one_off_histogram_bucket", [], ["+Inf"]) == 1
+      check histogram("one_off_histogram").valueByName("one_off_histogram_count") == 1
+      check histogram("one_off_histogram").valueByName("one_off_histogram_sum") == 2
 
   test "timing":
     myHistogram.time:
