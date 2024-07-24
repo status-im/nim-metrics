@@ -4,8 +4,6 @@
 #   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-# taken from https://github.com/status-im/nim-beacon-chain/tree/master/benchmarks
-
 import times, stats, strformat
 export times, stats, strformat
 
@@ -45,4 +43,3 @@ template bench*(name: string, compute_result: typed, body: untyped) {.dirty.}=
       stats.push stop - start
     let global_stop = cpuTime()
     printStats(name, compute_result)
-
