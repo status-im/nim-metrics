@@ -9,7 +9,7 @@ skipDirs      = @["tests", "benchmarks"]
 
 ### Dependencies
 requires "nim >= 1.6.14",
-         "chronos >= 3.2.0",
+         "chronos >= 4.0.3",
          "results",
          "stew"
 
