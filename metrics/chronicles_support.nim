@@ -52,6 +52,7 @@ when defined(metrics):
             )
           )
     )
+    res
 
   formatIt(Registry):
     it.toLog
