@@ -669,12 +669,6 @@ when defined(metrics):
     result =
       @[
         Metric(name: name, labels: @labels, labelValues: labelValues),
-        Metric(
-          name: name & "_created",
-          labels: @labels,
-          labelValues: labelValues,
-          value: getTime().toUnix().float64,
-        )
       ]
 
   proc newGauge*(
