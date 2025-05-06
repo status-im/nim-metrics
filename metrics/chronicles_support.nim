@@ -36,21 +36,21 @@ when defined(metrics):
     var res: seq[string]
     registry.collect(
       proc(
-        name: string,
-        value: float64,
-        labels: openArray[string],
-        labelValues: openArray[string],
-        timestamp: Time,
+          name: string,
+          value: float64,
+          labels: openArray[string],
+          labelValues: openArray[string],
+          timestamp: Time,
       ) =
-          res.add(
-            $Metric(
-              name: name,
-              value: value,
-              labels: @labels,
-              labelValues: @labelValues,
-              timestamp: timestamp,
-            )
+        res.add(
+          $Metric(
+            name: name,
+            value: value,
+            labels: @labels,
+            labelValues: @labelValues,
+            timestamp: timestamp,
           )
+        )
     )
     res
 

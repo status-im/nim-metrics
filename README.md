@@ -432,6 +432,9 @@ When submitting pull requests, please add test cases for any new features or
 fixes and make sure `nimble test` is still able to execute the entire test
 suite successfully.
 
+Code formatting is done using [nph](https://github.com/arnetheduck/nph). See
+[CI](./.github/workflows/ci.yml) for the correct version.
+
 ## License
 
 Licensed and distributed under either of

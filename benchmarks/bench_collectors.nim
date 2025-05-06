@@ -4,8 +4,7 @@
 #   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import
-  ./bench_common, ../metrics
+import ./bench_common, ../metrics
 
 proc main(nb_samples: Natural) =
   warmup()
@@ -21,7 +20,9 @@ proc main(nb_samples: Natural) =
     counter1.unregister()
 
   let labelValues = @["a", "b"]
-  bench("create a counter with 2 labels and increment it 3 times with different values", res):
+  bench(
+    "create a counter with 2 labels and increment it 3 times with different values", res
+  ):
     declareCounter counter2, "help", @["foo", "bar"]
     counter2.inc(labelValues = labelValues)
     counter2.inc(2, labelValues)

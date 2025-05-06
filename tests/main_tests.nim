@@ -4,8 +4,7 @@
 #   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import net, os, unittest2,
-      ../metrics
+import net, os, unittest2, ../metrics
 
 when defined(metrics):
   import times
@@ -15,7 +14,7 @@ declarePublicCounter globalPublicCounter, "help"
 declareGauge globalGauge, "help"
 declarePublicGauge globalPublicGauge, "help"
 
-proc gcSafetyTest* {.gcsafe.} = # The test is successful if this proc compiles
+proc gcSafetyTest*() {.gcsafe.} = # The test is successful if this proc compiles
   globalCounter.inc 2
   globalPublicCounter.inc(2)
   globalGauge.set 10.0
@@ -38,7 +37,8 @@ suite "counter":
     check myCounter.value == 8
     myCounter.inc(0.5)
     check myCounter.value == 8.5
-    myCounter.inc(-1) # you shouldn't be doing this - but we don't want metrics to crash the app
+    myCounter.inc(-1)
+      # you shouldn't be doing this - but we don't want metrics to crash the app
     check myCounter.value == 8.5
     # name validation (have to use the internal API to get past Nim's identifier validation)
     when defined(metrics):
@@ -56,7 +56,7 @@ suite "counter":
       # # can't catch an exception raised in the assignment to a {.global.}
       # # variable.
       # expect RegistrationError:
-        # check gauge("one_off_counter").value == 0
+      # check gauge("one_off_counter").value == 0
 
       # colons in name
       counter("one:off:counter:colons").inc()
@@ -117,20 +117,23 @@ suite "counter":
     check lCounter2.value(labelValues2) == 1
 
   test "sample rate":
-    declareCounter sCounter, "counter with a sample rate set", registry = registry, sampleRate = 0.5
+    declareCounter sCounter,
+      "counter with a sample rate set", registry = registry, sampleRate = 0.5
     sCounter.inc()
     # No sampling done on our side, just in sending the increments to a StatsD server
     check sCounter.value == 1
 
   test "names with colons":
-    declareCounter cCounter, "counter with colons in name", registry = registry, name = "foo:bar:baz"
+    declareCounter cCounter,
+      "counter with colons in name", registry = registry, name = "foo:bar:baz"
     cCounter.inc()
     check cCounter.value == 1
     check cCounter.valueByName("foo:bar:baz_total") == 1
     # echo cCounter
 
     var myName = "bla:bla"
-    declareCounter cCounter2, "another counter with colon in name", registry = registry, name = myName
+    declareCounter cCounter2,
+      "another counter with colon in name", registry = registry, name = myName
     cCounter2.inc()
     check cCounter2.value == 1
     check cCounter2.valueByName("bla:bla_total") == 1
@@ -191,7 +194,8 @@ suite "gauge":
     check lgauge2.value(labelValues) >= 1
 
   test "names with colons":
-    declareGauge cGauge, "gauge with colons in name", registry = registry, name = "foo:bar:baz"
+    declareGauge cGauge,
+      "gauge with colons in name", registry = registry, name = "foo:bar:baz"
     cGauge.inc()
     check cGauge.value == 1
     check cGauge.valueByName("foo:bar:baz") == 1
@@ -232,7 +236,8 @@ suite "summary":
     check lsummary.valueByName("lsummary_sum", labelValues) >= 1
 
   test "names with colons":
-    declareSummary cSummary, "summary with colons in name", registry = registry, name = "foo:bar:baz"
+    declareSummary cSummary,
+      "summary with colons in name", registry = registry, name = "foo:bar:baz"
     cSummary.observe(10)
     check cSummary.valueByName("foo:bar:baz_count") == 1
     check cSummary.valueByName("foo:bar:baz_sum") == 10
@@ -297,10 +302,18 @@ suite "histogram":
   when not defined(noAlter):
     test "alternative API":
       histogram("one_off_histogram").observe(2)
-      check histogram("one_off_histogram").valueByName("one_off_histogram_bucket", [], ["1.0"]) == 0
-      check histogram("one_off_histogram").valueByName("one_off_histogram_bucket", [], ["2.5"]) == 1
-      check histogram("one_off_histogram").valueByName("one_off_histogram_bucket", [], ["5.0"]) == 1
-      check histogram("one_off_histogram").valueByName("one_off_histogram_bucket", [], ["+Inf"]) == 1
+      check histogram("one_off_histogram").valueByName(
+        "one_off_histogram_bucket", [], ["1.0"]
+      ) == 0
+      check histogram("one_off_histogram").valueByName(
+        "one_off_histogram_bucket", [], ["2.5"]
+      ) == 1
+      check histogram("one_off_histogram").valueByName(
+        "one_off_histogram_bucket", [], ["5.0"]
+      ) == 1
+      check histogram("one_off_histogram").valueByName(
+        "one_off_histogram_bucket", [], ["+Inf"]
+      ) == 1
       check histogram("one_off_histogram").valueByName("one_off_histogram_count") == 1
       check histogram("one_off_histogram").valueByName("one_off_histogram_sum") == 2
 
@@ -322,7 +335,8 @@ suite "histogram":
     check lhistogram.valueByName("lhistogram_bucket", labelValues, ["+Inf"]) == 1
 
   test "names with colons":
-    declareHistogram cHistogram, "histogram with colons in name", registry = registry, name = "foo:bar:baz"
+    declareHistogram cHistogram,
+      "histogram with colons in name", registry = registry, name = "foo:bar:baz"
     cHistogram.observe(10)
     check cHistogram.valueByName("foo:bar:baz_count") == 1
     check cHistogram.valueByName("foo:bar:baz_sum") == 10
@@ -340,16 +354,13 @@ when defined(metrics):
   var
     myCustomCollector = MyCustomCollector.newCollector("my_custom_collector", "help")
     registry2 = newRegistry()
-    myCustomCollector2 = MyCustomCollector.newCollector("my_custom_collector2", "help2", registry = registry2)
+    myCustomCollector2 = MyCustomCollector.newCollector(
+      "my_custom_collector2", "help2", registry = registry2
+    )
 
   method collect(collector: MyCustomCollector, output: MetricHandler) =
     let timestamp = collector.now()
-    output(
-      name = "custom_metric",
-      value = 42,
-      timestamp = timestamp,
-    )
-
+    output(name = "custom_metric", value = 42, timestamp = timestamp)
 
   suite "custom collectors":
     test "42":
@@ -358,10 +369,10 @@ when defined(metrics):
     test "custom registry":
       var metrics: seq[float64]
       proc output(
-        name: string,
-        value: float64,
-        labels, labelValues: openArray[string],
-        timestamp: Time,
+          name: string,
+          value: float64,
+          labels, labelValues: openArray[string],
+          timestamp: Time,
       ) =
         metrics.add(value)
 
@@ -386,4 +397,3 @@ suite "system metrics":
       setSystemMetricsAutomaticUpdate(false)
       updateSystemMetrics()
       updateThreadMetrics()
-

@@ -15,3 +15,12 @@ jobs:
         nimble install -y unittest2
         nimble test
         nimble test_chronicles
+
+  nph:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check `nph` formatting
+        uses: arnetheduck/nph-action@v1
+        with:
+          version: 0.6.1

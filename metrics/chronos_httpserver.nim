@@ -49,8 +49,9 @@ when defined(metrics):
   proc serveHttp(address: TransportAddress) {.thread.} =
     ignoreSignalsInThread()
 
-    proc cb(r: RequestFence): Future[HttpResponseRef] {.
-         async: (raises: [CancelledError]).} =
+    proc cb(
+        r: RequestFence
+    ): Future[HttpResponseRef] {.async: (raises: [CancelledError]).} =
       if r.isOk():
         let request = r.get()
         try:
@@ -115,9 +116,7 @@ when defined(metrics):
     let message = msg & ", reason: [" & $exc.name & "]: " & $exc.msg
     raise (ref MetricsError)(msg: message, parent: exc)
 
-  proc raiseMetricsError(
-      msg: string
-  ) {.noreturn, noinline, raises: [MetricsError].} =
+  proc raiseMetricsError(msg: string) {.noreturn, noinline, raises: [MetricsError].} =
     raise (ref MetricsError)(msg: msg)
 
   proc raiseMetricsError(
@@ -134,8 +133,7 @@ when defined(metrics):
   proc raiseMetricsError*(
       msg: string, err: OSErrorCode
   ) {.noreturn, noinline, raises: [MetricsError].} =
-    let message =
-      msg & ", reason: [OSError]: (" & $int(err) & ") " & osErrorMsg(err)
+    let message = msg & ", reason: [OSError]: (" & $int(err) & ") " & osErrorMsg(err)
     raise (ref MetricsError)(msg: message)
 
   proc respond(
@@ -152,10 +150,10 @@ when defined(metrics):
       raiseMetricsError("Incomplete response has been sent")
 
   proc communicate(
-      m: MetricsHttpServerRef,
-      req: MetricsRequest
+      m: MetricsHttpServerRef, req: MetricsRequest
   ): Future[MetricsResponse] {.
-    async: (raises: [CancelledError, MetricsError, TransportError]).} =
+      async: (raises: [CancelledError, MetricsError, TransportError])
+  .} =
     var buffer: array[MessageSize + 1, byte]
     buffer[0] = byte(req)
     block:
@@ -169,15 +167,16 @@ when defined(metrics):
 
   proc getMessage(m: MetricsResponse): string =
     var res = newStringOfCap(MessageSize + 1)
-    for i in 0..<len(m.data):
+    for i in 0 ..< len(m.data):
       let ch = m.data[i]
       if ch == 0x00'u8:
         break
       res.add(char(ch))
     res
 
-  proc asyncStep(server: MetricsServerData, data: MetricsThreadData,
-                 lastError: string): Future[bool] {.async: (raises: []).} =
+  proc asyncStep(
+      server: MetricsServerData, data: MetricsThreadData, lastError: string
+  ): Future[bool] {.async: (raises: []).} =
     var buffer: array[1, byte]
     try:
       await data.reqTransp.readExactly(addr buffer[0], len(buffer))
@@ -192,22 +191,20 @@ when defined(metrics):
 
       case buffer[0]
       of byte(MetricsRequest.Status):
-        let
-          message =
-            case data.http.state()
-            of ServerStopped: "STOPPED"
-            of ServerClosed: "CLOSED"
-            of ServerRunning: "RUNNING"
+        let message =
+          case data.http.state()
+          of ServerStopped: "STOPPED"
+          of ServerClosed: "CLOSED"
+          of ServerRunning: "RUNNING"
         await data.respond(ResponseOk, message)
         true
       of byte(MetricsRequest.Start):
         if data.http.state() != HttpServerState.ServerStopped:
-          let
-            message =
-              if data.http.state() == HttpServerState.ServerClosed:
-                "HTTP server is already closed"
-              else:
-                "HTTP server is already running"
+          let message =
+            if data.http.state() == HttpServerState.ServerClosed:
+              "HTTP server is already closed"
+            else:
+              "HTTP server is already running"
           await data.respond(ResponseError, message)
         else:
           data.http.start()
@@ -215,12 +212,11 @@ when defined(metrics):
         true
       of byte(MetricsRequest.Stop):
         if data.http.state() != HttpServerState.ServerRunning:
-          let
-            message =
-              if data.http.state() == HttpServerState.ServerClosed:
-                "HTTP server is already closed"
-              else:
-                "HTTP server is already stopped"
+          let message =
+            if data.http.state() == HttpServerState.ServerClosed:
+              "HTTP server is already closed"
+            else:
+              "HTTP server is already stopped"
           await data.respond(ResponseError, message)
         else:
           await data.http.stop()
@@ -252,12 +248,12 @@ when defined(metrics):
         await data.http.closeWait()
       return false
 
-  proc asyncLoop(server: MetricsServerData) {.
-       async: (raises: []).} =
+  proc asyncLoop(server: MetricsServerData) {.async: (raises: []).} =
     var lastError = ""
 
-    proc cb(r: RequestFence): Future[HttpResponseRef] {.
-         async: (raises: [CancelledError]).} =
+    proc cb(
+        r: RequestFence
+    ): Future[HttpResponseRef] {.async: (raises: [CancelledError]).} =
       if r.isOk():
         let request = r.get()
         try:
@@ -265,10 +261,9 @@ when defined(metrics):
             # Prometheus will drop our metrics in surprising ways if we give
             # it timestamps, so we don't.
             let
-              response =
-                block:
-                  {.gcsafe.}:
-                    defaultRegistry.toText()
+              response = block:
+                {.gcsafe.}:
+                  defaultRegistry.toText()
               headers = HttpTable.init([("Content-Type", CONTENT_TYPE)])
             await request.respond(Http200, response, headers)
           elif request.uri.path == "/health":
@@ -281,17 +276,15 @@ when defined(metrics):
         defaultResponse()
 
     let
-      http =
-        block:
-          let
-            socketFlags = {ServerFlags.ReuseAddr}
-            res = HttpServerRef.new(
-              server.address, cb, socketFlags = socketFlags)
-          if res.isErr():
-            lastError = res.error()
-            nil
-          else:
-            res.get()
+      http = block:
+        let
+          socketFlags = {ServerFlags.ReuseAddr}
+          res = HttpServerRef.new(server.address, cb, socketFlags = socketFlags)
+        if res.isErr():
+          lastError = res.error()
+          nil
+        else:
+          res.get()
       reqTransp = fromPipe2(server.requestPipe.read).valueOr:
         await http.closeWait()
         return
@@ -300,8 +293,7 @@ when defined(metrics):
         await reqTransp.closeWait()
         return
       threadData =
-        MetricsThreadData(
-          reqTransp: reqTransp, respTransp: respTransp, http: http)
+        MetricsThreadData(reqTransp: reqTransp, respTransp: respTransp, http: http)
 
     while true:
       let res = await asyncStep(server, threadData, lastError)
@@ -333,42 +325,36 @@ proc new*(
       closeHandle(b.read)
       closeHandle(b.write)
 
-    let
-      taddress =
-        try:
-          initTAddress(address, port)
-        except TransportAddressError:
-          return err("Invalid server address")
+    let taddress =
+      try:
+        initTAddress(address, port)
+      except TransportAddressError:
+        return err("Invalid server address")
     var
-      request =
-        block:
-          let res = createAsyncPipe()
-          if (res.read == asyncInvalidPipe) or (res.write == asyncInvalidPipe):
-            return err("Unable to create communication request pipe")
-          res
+      request = block:
+        let res = createAsyncPipe()
+        if (res.read == asyncInvalidPipe) or (res.write == asyncInvalidPipe):
+          return err("Unable to create communication request pipe")
+        res
       cleanupRequest = true
     defer:
       if cleanupRequest:
         request.closePipe()
 
     var
-      response =
-        block:
-          let res = createAsyncPipe()
-          if (res.read == asyncInvalidPipe) or (res.write == asyncInvalidPipe):
-            request.closePipe()
-            return err("Unable to create communication response pipe")
-          res
+      response = block:
+        let res = createAsyncPipe()
+        if (res.read == asyncInvalidPipe) or (res.write == asyncInvalidPipe):
+          request.closePipe()
+          return err("Unable to create communication response pipe")
+        res
       cleanupResponse = true
     defer:
       if cleanupResponse:
         response.closePipe()
 
-    let
-      data =
-        MetricsServerData(
-          address: taddress, requestPipe: request, responsePipe: response
-        )
+    let data =
+      MetricsServerData(address: taddress, requestPipe: request, responsePipe: response)
     var server = MetricsHttpServerRef(data: data)
     try:
       createThread(server.thread, serveMetricsServer, data)
@@ -381,14 +367,16 @@ proc new*(
       try:
         fromPipe(request.write)
       except CatchableError:
-        return err("Unable to establish communication channel with " &
-                   "metrics server thread")
+        return err(
+          "Unable to establish communication channel with " & "metrics server thread"
+        )
     server.respTransp =
       try:
         fromPipe(response.read)
       except CatchableError:
-        return err("Unable to establish communication channel with " &
-          "metrics server thread")
+        return err(
+          "Unable to establish communication channel with " & "metrics server thread"
+        )
 
     cleanupRequest = false
     cleanupResponse = false
@@ -396,41 +384,41 @@ proc new*(
   else:
     err("Could not initialize metrics server, because metrics are disabled")
 
-proc start*(server: MetricsHttpServerRef) {.
-     async: (raises: [MetricsError, CancelledError]).} =
+proc start*(
+    server: MetricsHttpServerRef
+) {.async: (raises: [MetricsError, CancelledError]).} =
   ## Start metrics HTTP server.
   when defined(metrics):
     if not (server.thread.running()):
       raiseMetricsError("Metrics server is not running")
-    let
-      resp =
-        try:
-          await communicate(server, MetricsRequest.Start).wait(5.seconds)
-        except AsyncTimeoutError as exc:
-          raiseMetricsError(MetricsErrorKind.Timeout, exc)
-        except MetricsError as exc:
-          raiseMetricsError(MetricsErrorKind.Communication, exc)
-        except TransportError as exc:
-          raiseMetricsError(MetricsErrorKind.Transport, exc)
+    let resp =
+      try:
+        await communicate(server, MetricsRequest.Start).wait(5.seconds)
+      except AsyncTimeoutError as exc:
+        raiseMetricsError(MetricsErrorKind.Timeout, exc)
+      except MetricsError as exc:
+        raiseMetricsError(MetricsErrorKind.Communication, exc)
+      except TransportError as exc:
+        raiseMetricsError(MetricsErrorKind.Transport, exc)
     if resp.status != 0x00'u8:
       raiseMetricsError("Metrics server returns an error: " & resp.getMessage())
 
-proc stop*(server: MetricsHttpServerRef) {.
-     async: (raises: [MetricsError, CancelledError]).} =
+proc stop*(
+    server: MetricsHttpServerRef
+) {.async: (raises: [MetricsError, CancelledError]).} =
   ## Force metrics HTTP server to stop accepting new connections.
   when defined(metrics):
     if not (server.thread.running()):
       raiseMetricsError("Metrics server is not running")
-    let
-      resp =
-        try:
-          await communicate(server, MetricsRequest.Stop).wait(5.seconds)
-        except AsyncTimeoutError as exc:
-          raiseMetricsError(MetricsErrorKind.Timeout, exc)
-        except MetricsError as exc:
-          raiseMetricsError(MetricsErrorKind.Communication, exc)
-        except TransportError as exc:
-          raiseMetricsError(MetricsErrorKind.Transport, exc)
+    let resp =
+      try:
+        await communicate(server, MetricsRequest.Stop).wait(5.seconds)
+      except AsyncTimeoutError as exc:
+        raiseMetricsError(MetricsErrorKind.Timeout, exc)
+      except MetricsError as exc:
+        raiseMetricsError(MetricsErrorKind.Communication, exc)
+      except TransportError as exc:
+        raiseMetricsError(MetricsErrorKind.Transport, exc)
     if resp.status != 0x00'u8:
       raiseMetricsError("Metrics server returns an error: " & resp.getMessage())
 
@@ -454,12 +442,14 @@ proc close*(server: MetricsHttpServerRef) {.async: (raises: []).} =
 
     # Closing pipes, other pipe ends should be closed by foreign thread.
     await noCancel allFutures(
-      server.reqTransp.closeWait(), server.respTransp.closeWait())
+      server.reqTransp.closeWait(), server.respTransp.closeWait()
+    )
     # Thread should exit very soon.
     server.thread.joinThread()
 
-proc status*(server: MetricsHttpServerRef): Future[MetricsHttpServerStatus] {.
-             async: (raises: [CancelledError, MetricsError]).} =
+proc status*(
+    server: MetricsHttpServerRef
+): Future[MetricsHttpServerStatus] {.async: (raises: [CancelledError, MetricsError]).} =
   ## Returns current status of metrics HTTP server.
   ##
   ## Note, that if `metrics` variable is not defined this procedure will return
@@ -468,16 +458,15 @@ proc status*(server: MetricsHttpServerRef): Future[MetricsHttpServerStatus] {.
     if not (server.thread.running()):
       return MetricsHttpServerStatus.Closed
 
-    let
-      resp =
-        try:
-          await communicate(server, MetricsRequest.Status).wait(5.seconds)
-        except AsyncTimeoutError as exc:
-          raiseMetricsError(MetricsErrorKind.Timeout, exc)
-        except MetricsError as exc:
-          raiseMetricsError(MetricsErrorKind.Communication, exc)
-        except TransportError as exc:
-          raiseMetricsError(MetricsErrorKind.Transport, exc)
+    let resp =
+      try:
+        await communicate(server, MetricsRequest.Status).wait(5.seconds)
+      except AsyncTimeoutError as exc:
+        raiseMetricsError(MetricsErrorKind.Timeout, exc)
+      except MetricsError as exc:
+        raiseMetricsError(MetricsErrorKind.Communication, exc)
+      except TransportError as exc:
+        raiseMetricsError(MetricsErrorKind.Transport, exc)
 
     if resp.status != 0x00'u8:
       raiseMetricsError("Metrics server returns an error: " & resp.getMessage())
@@ -494,14 +483,12 @@ proc status*(server: MetricsHttpServerRef): Future[MetricsHttpServerStatus] {.
   else:
     MetricsHttpServerStatus.Closed
 
-proc new*(
-  t: typedesc[MetricsHttpServerMiddlewareRef]): HttpServerMiddlewareRef =
-
+proc new*(t: typedesc[MetricsHttpServerMiddlewareRef]): HttpServerMiddlewareRef =
   proc middlewareCallback(
       middleware: HttpServerMiddlewareRef,
       reqfence: RequestFence,
-      handler: HttpProcessCallback2): Future[HttpResponseRef] {.
-      async: (raises: [CancelledError]).} =
+      handler: HttpProcessCallback2,
+  ): Future[HttpResponseRef] {.async: (raises: [CancelledError]).} =
     if reqfence.isOk():
       let request = reqfence.get()
       try:
@@ -510,15 +497,15 @@ proc new*(
             # Prometheus will drop our metrics in surprising ways if we give
             # it timestamps, so we don't.
             let
-              response =
-                block:
-                  {.gcsafe.}:
-                    defaultRegistry.toText()
+              response = block:
+                {.gcsafe.}:
+                  defaultRegistry.toText()
               headers = HttpTable.init([("Content-Type", CONTENT_TYPE)])
             await request.respond(Http200, response, headers)
           else:
-            await request.respond(Http200,
-              "Metrics are not enabled, build your application with -d:metrics")
+            await request.respond(
+              Http200, "Metrics are not enabled, build your application with -d:metrics"
+            )
         elif request.uri.path == "/health":
           await request.respond(Http200, "OK")
         else:
