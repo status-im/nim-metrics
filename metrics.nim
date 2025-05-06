@@ -56,7 +56,6 @@ type
     labels*: seq[string]
     timestamp*: bool ## Whether or not we're collecting timestamps for this collector
     creationThreadId*: int
-    sampleRate*: float # only used by StatsD counters
 
   SimpleCollector* = ref object of Collector
     metricKeys*: Table[LabelKey, int]
@@ -467,19 +466,6 @@ when defined(metrics):
   proc setSystemMetricsAutomaticUpdate*(value: bool) =
     systemMetricsAutomaticUpdate = value
 
-  proc pushMetrics*(
-      name: string,
-      value: float64,
-      increment = 0.float64,
-      metricType: string,
-      timestamp: Time,
-      sampleRate = 1.float,
-      doUpdateSystemMetrics = true,
-  ) {.raises: [].} =
-    # this may run from different threads
-    if systemMetricsAutomaticUpdate and doUpdateSystemMetrics:
-      updateSystemMetrics()
-
 ###########
 # counter #
 ###########
@@ -506,11 +492,9 @@ when defined(metrics):
       help: string,
       labels: openArray[string] = [],
       registry = defaultRegistry,
-      sampleRate = 1.float,
       timestamp = false,
   ): Counter {.raises: [ValueError, RegistrationError].} =
     result = Counter.newCollector(name, help, labels, registry, "counter", timestamp)
-    result.sampleRate = sampleRate
     if labels.len == 0:
       result.metrics.add newCounterMetrics(name, labels, labels)
       result.metricKeys[LabelKey.init(labels)] = result.metrics.high()
@@ -527,33 +511,24 @@ when defined(metrics):
     withLabelValues(counter, labelValues, valueSym):
       valueSym[0].value += amount
       valueSym[0].timestamp = timestamp
-
-      pushMetrics(
-        name = counter.name,
-        value = valueSym[0].value,
-        increment = amount,
-        metricType = "c",
-        timestamp = timestamp,
-        sampleRate = counter.sampleRate,
-      )
     do:
       newCounterMetrics(counter.name, counter.labels, labelValues)
+
+    updateSystemMetrics()
 
 template declareCounter*(
     identifier: untyped,
     help: static string,
     labels: openArray[string] = [],
     registry = defaultRegistry,
-    sampleRate = 1.float,
     name = "",
     timestamp = false,
 ) {.dirty.} =
   # fine-grained collector disabling will go in here, turning disabled
   # collectors into type aliases for IgnoredCollector
   when defined(metrics):
-    let identifier = newCounter(
-      nameOrIdentifier(identifier, name), help, labels, registry, sampleRate, timestamp
-    )
+    let identifier =
+      newCounter(nameOrIdentifier(identifier, name), help, labels, registry, timestamp)
   else:
     type identifier = IgnoredCollector
 
@@ -562,14 +537,12 @@ template declarePublicCounter*(
     help: static string,
     labels: openArray[string] = [],
     registry = defaultRegistry,
-    sampleRate = 1.float,
     name = "",
     timestamp = false,
 ) {.dirty.} =
   when defined(metrics):
-    let identifier* = newCounter(
-      nameOrIdentifier(identifier, name), help, labels, registry, sampleRate, timestamp
-    )
+    let identifier* =
+      newCounter(nameOrIdentifier(identifier, name), help, labels, registry, timestamp)
   else:
     type identifier* = IgnoredCollector
 
@@ -666,14 +639,10 @@ when defined(metrics):
     withLabelValues(gauge, labelValues, valueSym):
       valueSym[0].value += amount
       valueSym[0].timestamp = timestamp
-      pushMetrics(
-        name = gauge.name,
-        value = valueSym[0].value,
-        metricType = "g",
-        timestamp = timestamp,
-      )
     do:
       newGaugeMetrics(gauge.name, gauge.labels, labelValues)
+
+    updateSystemMetrics()
 
   proc setGauge(
       gauge: Gauge,
@@ -687,15 +656,11 @@ when defined(metrics):
       valueSym[0].value = value.float64
       if gauge.timestamp:
         valueSym[0].timestamp = getTime()
-      pushMetrics(
-        name = gauge.name,
-        value = value.float64,
-        metricType = "g",
-        timestamp = timestamp,
-        doUpdateSystemMetrics = doUpdateSystemMetrics,
-      )
     do:
       newGaugeMetrics(gauge.name, gauge.labels, labelValues)
+
+    if doUpdateSystemMetrics:
+      updateSystemMetrics()
 
 template declareGauge*(
     identifier: untyped,
@@ -1050,12 +1015,8 @@ template observe*(
 #########################
 
 when defined(metrics):
-  const metrics_max_hooks = 16
-  type ThreadMetricsUpdateProc = proc() {.gcsafe, nimcall, raises: [].}
   let mainThreadID = getThreadId()
   var
-    threadMetricsUpdateProcs: array[metrics_max_hooks, ThreadMetricsUpdateProc]
-    threadMetricsUpdateProcsIndex = 0
     systemMetricsUpdateInterval = initDuration(seconds = 10)
     systemMetricsLastUpdated = getMonoTime()
 
@@ -1065,13 +1026,13 @@ when defined(metrics):
   proc setSystemMetricsUpdateInterval*(value: Duration) =
     systemMetricsUpdateInterval = value
 
-  proc updateThreadMetrics*() {.gcsafe.} =
-    for i in 0 ..< threadMetricsUpdateProcsIndex:
-      threadMetricsUpdateProcs[i]()
+  proc updateThreadMetrics*() {.gcsafe.}
+    ## Function that should regularly be called from within each thread for
+    ## which per-thread metrics are desired - currently, this is limited to
+    ## GC heap statistics.
 
-  # No longer used for all system metrics, which now are custom collectors, but
-  # still used for main-thread metrics.
-  proc updateSystemMetrics*() {.gcsafe.} =
+  proc updateSystemMetrics*() =
+    ## Update metrics related to the main application thread
     if systemMetricsAutomaticUpdate:
       # Update system metrics if at least systemMetricsUpdateInterval seconds
       # have passed and if we are being called from the main thread.
@@ -1230,7 +1191,7 @@ when defined(metrics):
   declareGauge nim_gc_mem_occupied_bytes,
     "the number of bytes that are owned by a thread's GC and hold data", ["thread_id"]
 
-  proc updateNimRuntimeInfoThread() =
+  proc updateThreadMetrics() =
     try:
       let threadID = getThreadId()
 
@@ -1251,7 +1212,3 @@ when defined(metrics):
         # TODO: parse the output of `GC_getStatistics()` for more stats
     except CatchableError as e:
       printError(e.msg)
-
-  if threadMetricsUpdateProcsIndex < threadMetricsUpdateProcs.len:
-    threadMetricsUpdateProcs[threadMetricsUpdateProcsIndex] = updateNimRuntimeInfoThread
-    threadMetricsUpdateProcsIndex += 1
