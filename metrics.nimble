@@ -1,7 +1,7 @@
 mode = ScriptMode.Verbose
 
 packageName   = "metrics"
-version       = "0.1.2"
+version       = "0.2.0"
 author        = "Status Research & Development GmbH"
 description   = "Metrics client library supporting Prometheus"
 license       = "MIT or Apache License 2.0"

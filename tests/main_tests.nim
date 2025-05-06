@@ -5,23 +5,10 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 import net, os, unittest2,
-      ../metrics, ../metrics/export_backend
+      ../metrics
 
 when defined(metrics):
   import times
-
-  addExportBackend(
-    metricProtocol = STATSD,
-    netProtocol = UDP,
-    address = "127.0.0.1",
-    port = Port(8125)
-  )
-  addExportBackend(
-    metricProtocol = CARBON,
-    netProtocol = TCP,
-    address = "127.0.0.1",
-    port = Port(2003)
-  )
 
 declareCounter globalCounter, "help"
 declarePublicCounter globalPublicCounter, "help"
