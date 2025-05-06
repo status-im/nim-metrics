@@ -10,9 +10,9 @@ import chronos/unittest2/asynctests
 import ../metrics, ../metrics/chronos_httpserver
 
 suite "Chronos metrics HTTP server test suite":
-
-  proc httpClient(url: string): Future[HttpResponseTuple] {.
-       async: (raises: [CancelledError, HttpError]).} =
+  proc httpClient(
+      url: string
+  ): Future[HttpResponseTuple] {.async: (raises: [CancelledError, HttpError]).} =
     let session = HttpSessionRef.new()
     try:
       await session.fetch(parseUri(url))
@@ -53,8 +53,7 @@ suite "Chronos metrics HTTP server test suite":
     else:
       check MetricsHttpServerRef.new("127.0.0.1", Port(8080)).isErr() == true
 
-  asyncTest "new()/start()/response/stop()/start()/response/stop()/close() " &
-            "test":
+  asyncTest "new()/start()/response/stop()/start()/response/stop()/close() " & "test":
     when defined(metrics):
       let server = MetricsHttpServerRef.new("127.0.0.1", Port(8080)).get()
       block:
@@ -172,8 +171,9 @@ suite "Chronos metrics HTTP server test suite":
 
   asyncTest "Chronos middleware test":
     when defined(metrics):
-      proc process(r: RequestFence): Future[HttpResponseRef] {.
-           async: (raises: [CancelledError]).} =
+      proc process(
+          r: RequestFence
+      ): Future[HttpResponseRef] {.async: (raises: [CancelledError]).} =
         if r.isOk():
           let request = r.get()
           if request.uri.path == "/test":
@@ -189,9 +189,12 @@ suite "Chronos metrics HTTP server test suite":
       let
         socketFlags = {ServerFlags.TcpNoDelay, ServerFlags.ReuseAddr}
         middlewares = [MetricsHttpServerMiddlewareRef.new()]
-        res = HttpServerRef.new(initTAddress("127.0.0.1:0"), process,
-                                middlewares = middlewares,
-                                socketFlags = socketFlags)
+        res = HttpServerRef.new(
+          initTAddress("127.0.0.1:0"),
+          process,
+          middlewares = middlewares,
+          socketFlags = socketFlags,
+        )
       check res.isOk()
       let server = res.get()
       server.start()
@@ -215,4 +218,4 @@ suite "Chronos metrics HTTP server test suite":
         await server.stop()
         await server.closeWait()
     else:
-      check not(isNil(MetricsHttpServerMiddlewareRef.new()))
+      check not (isNil(MetricsHttpServerMiddlewareRef.new()))

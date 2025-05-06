@@ -12,7 +12,7 @@ proc warmup*() =
   let start = cpuTime()
   var foo = 123'i64
   for i in 0'i64 ..< 300_000_000'i64:
-    foo += i*i mod 456
+    foo += i * i mod 456
     foo = foo mod 789
 
   # Compiler shouldn't optimize away the results as cpuTime rely on sideeffects
@@ -31,7 +31,7 @@ template printStats*(experiment_name: string, compute_result: typed) {.dirty.} =
   echo compute_result # Prevents compiler from optimizing stuff away
   echo '\n'
 
-template bench*(name: string, compute_result: typed, body: untyped) {.dirty.}=
+template bench*(name: string, compute_result: typed, body: untyped) {.dirty.} =
   block: # Actual bench
     var stats: RunningStat
     let global_start = cpuTime()

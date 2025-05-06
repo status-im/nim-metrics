@@ -1,17 +1,14 @@
 mode = ScriptMode.Verbose
 
-packageName   = "metrics"
-version       = "0.2.0"
-author        = "Status Research & Development GmbH"
-description   = "Metrics client library supporting Prometheus"
-license       = "MIT or Apache License 2.0"
-skipDirs      = @["tests", "benchmarks"]
+packageName = "metrics"
+version = "0.2.0"
+author = "Status Research & Development GmbH"
+description = "Metrics client library supporting Prometheus"
+license = "MIT or Apache License 2.0"
+skipDirs = @["tests", "benchmarks"]
 
 ### Dependencies
-requires "nim >= 1.6.14",
-         "chronos >= 4.0.3",
-         "results",
-         "stew"
+requires "nim >= 1.6.14", "chronos >= 4.0.3", "results", "stew"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
@@ -24,8 +21,7 @@ let cfg =
   " --styleCheck:usages --styleCheck:error" &
   (if verbose: "" else: " --verbosity:0 --hints:off") &
   " --skipParentCfg --skipUserCfg --outdir:build " &
-  quoteShell("--nimcache:build/nimcache/$projectName") &
-  " -d:metricsTest"
+  quoteShell("--nimcache:build/nimcache/$projectName") & " -d:metricsTest"
 
 proc build(args, path: string) =
   exec nimc & " " & lang & " " & cfg & " " & flags & " " & args & " " & path

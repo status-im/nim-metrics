@@ -38,14 +38,13 @@ type
     labelValues*: seq[string]
     timestamp*: Time
 
-  MetricHandler* =
-    proc(
-      name: string,
-      value: float64,
-      labels: openArray[string] = [],
-      labelValues: openArray[string] = [],
-      timestamp: Time,
-    ) {.gcsafe, raises: [].}
+  MetricHandler* = proc(
+    name: string,
+    value: float64,
+    labels: openArray[string] = [],
+    labelValues: openArray[string] = [],
+    timestamp: Time,
+  ) {.gcsafe, raises: [].}
 
   CollecorHandler* = proc(collector: Collector)
 
@@ -132,7 +131,7 @@ when defined(metrics):
     res.add name
     if labels.len > 0:
       res.add('{')
-      for i in 0..labels.high:
+      for i in 0 .. labels.high:
         if i > 0:
           res.add ","
         res.add labels[i]
@@ -148,11 +147,7 @@ when defined(metrics):
 
   proc addText(res: var string, metric: Metric) =
     addText(
-      res,
-      metric.name,
-      metric.value,
-      metric.labels,
-      metric.labelValues,
+      res, metric.name, metric.value, metric.labels, metric.labelValues,
       metric.timestamp,
     )
 
@@ -163,8 +158,8 @@ when defined(metrics):
     nameRegexStr = r"^[a-zA-Z_:][a-zA-Z0-9_:]*$"
     labelRegexStr = r"^[a-zA-Z_][a-zA-Z0-9_]*$"
 
-    labelStartChars = {'a'..'z', 'A'..'Z', '_'}
-    labelChars = labelStartChars + {'0'..'9'}
+    labelStartChars = {'a' .. 'z', 'A' .. 'Z', '_'}
+    labelChars = labelStartChars + {'0' .. '9'}
     nameStartChars = labelStartChars + {':'}
     nameChars = labelChars + {':'}
 
@@ -174,9 +169,9 @@ when defined(metrics):
   proc validateName(name: string) {.raises: [ValueError].} =
     if not validate(name, nameStartChars, nameChars):
       raise newException(
-          ValueError,
-          "Invalid name: '" & name & "'. It should match the regex: " & nameRegexStr,
-        )
+        ValueError,
+        "Invalid name: '" & name & "'. It should match the regex: " & nameRegexStr,
+      )
 
   proc validateLabels(
       labels: openArray[string], invalidLabelNames: openArray[string] = []
@@ -184,20 +179,20 @@ when defined(metrics):
     for label in labels:
       if not validate(label, labelStartChars, labelChars):
         raise newException(
-            ValueError,
-            "Invalid label: '" & label & "'. It should match the regex: '" &
-              labelRegexStr & "'.",
-          )
+          ValueError,
+          "Invalid label: '" & label & "'. It should match the regex: '" & labelRegexStr &
+            "'.",
+        )
       if label.startsWith("__"):
         raise newException(
-            ValueError, "Invalid label: '" & label & "'. It should not start with '__'."
-          )
+          ValueError, "Invalid label: '" & label & "'. It should not start with '__'."
+        )
       if label in invalidLabelNames:
         raise newException(
-            ValueError,
-            "Invalid label: '" & label & "'. It should not be one of: " &
-              $invalidLabelNames & ".",
-          )
+          ValueError,
+          "Invalid label: '" & label & "'. It should not be one of: " &
+            $invalidLabelNames & ".",
+        )
 
 ######################
 # generic collectors #
@@ -297,8 +292,7 @@ proc `$`*(collector: type IgnoredCollector): string =
 
 when defined(metrics):
   proc valueImpl*(
-      collector: Collector,
-      labelValuesParam: openArray[string] = [],
+      collector: Collector, labelValuesParam: openArray[string] = []
   ): float64 {.gcsafe, raises: [KeyError].} =
     var res = NaN
     # Don't access the "metrics" field directly, so we can support custom
@@ -309,17 +303,18 @@ when defined(metrics):
           name: string,
           value: float64,
           labels, labelValues: openArray[string],
-          timestamp: Time) =
+          timestamp: Time,
+      ) =
         if res != res and labelValues == lv:
           res = value
 
       collect(collector, findMetric)
       if res != res: # NaN
         raise newException(
-            KeyError,
-            "No such metric for this collector (label values = " & $(@labelValuesParam) &
-              ").",
-              )
+          KeyError,
+          "No such metric for this collector (label values = " & $(@labelValuesParam) &
+            ").",
+        )
     res
 
 template value*(
@@ -355,10 +350,10 @@ proc valueByNameInternal*(
       return res
 
     raise newException(
-        KeyError,
-        "No such metric name for this collector: '" & metricName & "' (label values = " &
-          $allLabelValues & ").",
-      )
+      KeyError,
+      "No such metric name for this collector: '" & metricName & "' (label values = " &
+        $allLabelValues & ").",
+    )
 
 template valueByName*(
     collector: Collector | type IgnoredCollector,
@@ -390,8 +385,8 @@ proc register*[T](
     withLock registry.lock:
       if collector in registry.collectors:
         raise newException(
-            RegistrationError, "Collector already registered: " & collector.name
-          )
+          RegistrationError, "Collector already registered: " & collector.name
+        )
 
       registry.collectors.incl(collector)
 
@@ -449,16 +444,15 @@ when defined(metrics):
   ): T {.raises: [ValueError, RegistrationError].} =
     validateName(name)
     validateLabels(labels)
-    result =
-      T(
-        name: name,
-        help: processHelp(name, help),
-        typ: processType(name, standardType),
-          # Prometheus does not support a non-standard value here
-        labels: @labels,
-        creationThreadId: getThreadId(),
-        timestamp: timestamp,
-      )
+    result = T(
+      name: name,
+      help: processHelp(name, help),
+      typ: processType(name, standardType),
+        # Prometheus does not support a non-standard value here
+      labels: @labels,
+      creationThreadId: getThreadId(),
+      timestamp: timestamp,
+    )
     result.lock.initLock()
     result.register(registry)
 
@@ -502,7 +496,7 @@ when defined(metrics):
         labels: @labels,
         labelValues: labelValues,
         value: getTime().toUnix().float64,
-      )
+      ),
     ]
 
   # don't document this one, even if we're forced to make it public, because it
@@ -557,16 +551,9 @@ template declareCounter*(
   # fine-grained collector disabling will go in here, turning disabled
   # collectors into type aliases for IgnoredCollector
   when defined(metrics):
-    let
-      identifier =
-        newCounter(
-          nameOrIdentifier(identifier, name),
-          help,
-          labels,
-          registry,
-          sampleRate,
-          timestamp,
-        )
+    let identifier = newCounter(
+      nameOrIdentifier(identifier, name), help, labels, registry, sampleRate, timestamp
+    )
   else:
     type identifier = IgnoredCollector
 
@@ -580,16 +567,9 @@ template declarePublicCounter*(
     timestamp = false,
 ) {.dirty.} =
   when defined(metrics):
-    let
-      identifier* =
-        newCounter(
-          nameOrIdentifier(identifier, name),
-          help,
-          labels,
-          registry,
-          sampleRate,
-          timestamp,
-        )
+    let identifier* = newCounter(
+      nameOrIdentifier(identifier, name), help, labels, registry, sampleRate, timestamp
+    )
   else:
     type identifier* = IgnoredCollector
 
@@ -666,10 +646,7 @@ when defined(metrics):
       name: string, labels, labelValues: openArray[string]
   ): seq[Metric] =
     let labelValues = labelValues.mapIt(it.processLabelValue())
-    result =
-      @[
-        Metric(name: name, labels: @labels, labelValues: labelValues),
-      ]
+    result = @[Metric(name: name, labels: @labels, labelValues: labelValues)]
 
   proc newGauge*(
       name: string,
@@ -729,9 +706,8 @@ template declareGauge*(
     timestamp = false,
 ) {.dirty.} =
   when defined(metrics):
-    var
-      identifier =
-        newGauge(nameOrIdentifier(identifier, name), help, labels, registry, timestamp)
+    var identifier =
+      newGauge(nameOrIdentifier(identifier, name), help, labels, registry, timestamp)
   else:
     type identifier = IgnoredCollector
 
@@ -754,9 +730,8 @@ template declarePublicGauge*(
     timestamp = false,
 ) {.dirty.} =
   when defined(metrics):
-    var
-      identifier* =
-        newGauge(nameOrIdentifier(identifier, name), help, labels, registry, timestamp)
+    var identifier* =
+      newGauge(nameOrIdentifier(identifier, name), help, labels, registry, timestamp)
   else:
     type identifier* = IgnoredCollector
 
@@ -847,7 +822,7 @@ when defined(metrics):
         labels: @labels,
         labelValues: labelValues,
         value: getTime().toUnix().float64,
-      )
+      ),
     ]
 
   proc newSummary*(
@@ -863,7 +838,9 @@ when defined(metrics):
       result.metrics.add newSummaryMetrics(name, labels, labels)
       result.metricKeys[LabelKey.init(labels)] = result.metrics.high()
 
-  proc observeSummary(summary: Summary, amount: float64, labelValues: openArray[string]) =
+  proc observeSummary(
+      summary: Summary, amount: float64, labelValues: openArray[string]
+  ) =
     let timestamp = summary.now()
 
     withLabelValues(summary, labelValues, valueSym):
@@ -882,9 +859,8 @@ template declareSummary*(
     name = "",
 ) {.dirty.} =
   when defined(metrics):
-    let
-      identifier =
-        newSummary(nameOrIdentifier(identifier, name), help, labels, registry)
+    let identifier =
+      newSummary(nameOrIdentifier(identifier, name), help, labels, registry)
   else:
     type identifier = IgnoredCollector
 
@@ -896,9 +872,8 @@ template declarePublicSummary*(
     name = "",
 ) {.dirty.} =
   when defined(metrics):
-    let
-      identifier* =
-        newSummary(nameOrIdentifier(identifier, name), help, labels, registry)
+    let identifier* =
+      newSummary(nameOrIdentifier(identifier, name), help, labels, registry)
   else:
     type identifier* = IgnoredCollector
 
@@ -938,10 +913,8 @@ template time*(
 # histogram #
 #############
 
-const
-  defaultHistogramBuckets* = [
-    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, Inf
-  ]
+const defaultHistogramBuckets* =
+  [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, Inf]
 when defined(metrics):
   proc newHistogramMetrics(
       name: string, labels, labelValues: openArray[string], buckets: seq[float64]
@@ -956,7 +929,7 @@ when defined(metrics):
           labels: @labels,
           labelValues: labelValues,
           value: getTime().toUnix().float64,
-        )
+        ),
       ]
     var bucketLabels = @labels & "le"
     for bucket in buckets:
@@ -985,13 +958,12 @@ when defined(metrics):
       bucketsSeq.add(Inf)
     if bucketsSeq.len < 2:
       raise newException(
-          ValueError,
-          "Invalid buckets list: '" & $bucketsSeq & "'. At least 2 required.",
-        )
+        ValueError, "Invalid buckets list: '" & $bucketsSeq & "'. At least 2 required."
+      )
     if not bucketsSeq.isSorted(system.cmp[float64]):
       raise newException(
-          ValueError, "Invalid buckets list: '" & $bucketsSeq & "'. Must be sorted."
-        )
+        ValueError, "Invalid buckets list: '" & $bucketsSeq & "'. Must be sorted."
+      )
     result =
       Histogram.newCollector(name, help, labels, registry, "histogram", timestamp)
     result.buckets = bucketsSeq
@@ -1030,11 +1002,9 @@ template declareHistogram*(
     timestamp = false,
 ) {.dirty.} =
   when defined(metrics):
-    let
-      identifier =
-        newHistogram(
-          nameOrIdentifier(identifier, name), help, labels, registry, buckets, timestamp
-        )
+    let identifier = newHistogram(
+      nameOrIdentifier(identifier, name), help, labels, registry, buckets, timestamp
+    )
   else:
     type identifier = IgnoredCollector
 
@@ -1048,11 +1018,9 @@ template declarePublicHistogram*(
     timestamp = false,
 ) {.dirty.} =
   when defined(metrics):
-    let
-      identifier* =
-        newHistogram(
-          nameOrIdentifier(identifier, name), help, labels, registry, buckets, timestamp
-        )
+    let identifier* = newHistogram(
+      nameOrIdentifier(identifier, name), help, labels, registry, buckets, timestamp
+    )
   else:
     type identifier* = IgnoredCollector
 
@@ -1098,7 +1066,7 @@ when defined(metrics):
     systemMetricsUpdateInterval = value
 
   proc updateThreadMetrics*() {.gcsafe.} =
-    for i in 0..<threadMetricsUpdateProcsIndex:
+    for i in 0 ..< threadMetricsUpdateProcsIndex:
       threadMetricsUpdateProcs[i]()
 
   # No longer used for all system metrics, which now are custom collectors, but
@@ -1138,9 +1106,8 @@ when defined(metrics) and defined(linux):
     pagesize = sysconf(SC_PAGESIZE).float64
 
   type ProcessInfo = ref object of Gauge
-  var
-    processInfo* {.global.} =
-      ProcessInfo.newCollector("process_info", "CPU and memory usage")
+  var processInfo* {.global.} =
+    ProcessInfo.newCollector("process_info", "CPU and memory usage")
 
   method collect*(collector: ProcessInfo, output: MetricHandler) =
     let timestamp = collector.now()
@@ -1203,9 +1170,8 @@ when defined(metrics) and defined(linux):
 
 when defined(metrics):
   type NimRuntimeInfo = ref object of Collector
-  let
-    nimRuntimeInfo* {.global.} =
-      NimRuntimeInfo.newCollector("nim_runtime_info", "Nim runtime info")
+  let nimRuntimeInfo* {.global.} =
+    NimRuntimeInfo.newCollector("nim_runtime_info", "Nim runtime info")
 
   method collect*(collector: NimRuntimeInfo, output: MetricHandler) =
     let timestamp = collector.now()
@@ -1224,7 +1190,7 @@ when defined(metrics):
           heapSum += data.sizes
           var smallest = 0
           var dedupe = false
-          for i in 0..<heapSizes.len:
+          for i in 0 ..< heapSizes.len:
             if heapSizes[i][0] == data.name:
               heapSizes[i][1] += data.sizes
               dedupe = true
@@ -1236,11 +1202,10 @@ when defined(metrics):
         sort(
           heapSizes,
           proc(a, b: auto): auto =
-              b[1] - a[1]
-            ,
+            b[1] - a[1],
         )
         # Lower the number of metrics to reduce metric cardinality.
-        for i in 0..<labelsLimit:
+        for i in 0 ..< labelsLimit:
           let (typeName, size) = heapSizes[i]
           output(
             name = "nim_gc_heap_instance_occupied_bytes",

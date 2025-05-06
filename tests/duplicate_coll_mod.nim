@@ -4,5 +4,3 @@ import ../metrics
 
 declareCounter duplicate_counter, "duplicate counter"
 duplicate_counter.inc()
-
-
