@@ -373,23 +373,35 @@ process_max_fds
 process_virtual_memory_bytes
 process_resident_memory_bytes
 process_start_time_seconds
+```
+
+The `process_*` metrics are only available on Linux, for now.
+
+### Nim runtime metrics
+
+The following metrics are automatically exposed for the Nim runtime:
+
+```text
 nim_gc_mem_bytes[thread_id]
 nim_gc_mem_occupied_bytes[thread_id]
 nim_gc_heap_instance_occupied_bytes[type_name]
 nim_gc_heap_instance_occupied_summed_bytes
 ```
 
-The `process_*` metrics are only available on Linux, for now.
-
-`nim_gc_heap_instance_occupied_bytes` is only available when compiling with
-`-d:nimTypeNames` and holds the top 10 instance types, in reverse order of
-their total heap usage (from all threads), at the time the metric is created.
+`nim_gc_heap_*` metrics are only available when compiling with
+`-d:nimTypeNames` and hold the top 10 instance types, in reverse order of
+their total heap usage (from all threads), at the time the metric is polled.
 Since this set changes with time, you'll see more than 10 types in Grafana.
 
-The thread-specific metrics are being updated automatically when a user-defined metric
-is changed in the main thread, but only if a minimal interval has passed since
-the last update (defaults to 10 second). All other system metrics are custom
-collectors which are updated at collection time.
+The Nim garbage collector exposes some per-thread metrics whose value is only
+accessible from within the thread itself.
+
+To update these, call `updateThreadMetrics` regularly from within each relevant
+thread - each such metric will include a `thread_id` label.
+
+Thread metrics for the main application thread are automatically updated
+whenever a metric is updated from the main application thread, though only
+at specified intervals.
 
 ```nim
 import times
@@ -400,9 +412,8 @@ when defined(metrics):
   setSystemMetricsUpdateInterval(initDuration(seconds = 2))
 ```
 
-You can also disable this automated piggy-backing on user-defined metric value
-changes, if you need more regularity, and take charge of updating system
-metrics yourself.
+In performance-sensitive applications, it is recommended that you disable the
+piggy-backing and update system metrics manually:
 
 ```nim
 # disable automatic updates
@@ -410,10 +421,6 @@ setSystemMetricsAutomaticUpdate(false)
 # somewhere in your event loop, at an interval of your choice
 updateThreadMetrics()
 ```
-
-Those metrics with with a "thread\_id" label are thread-specific metrics. The
-automatic update only covers thread metrics for the main thread. You'll have to
-call `updateThreadMetrics()` by yourself for any other thread you care about.
 
 Screenshot of [Grafana showing data from Prometheus that pulls it from Nimbus which uses nim-metrics](https://github.com/status-im/nimbus-eth1/#metric-visualisation):
 
@@ -443,4 +450,3 @@ Licensed and distributed under either of
 * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
 
 at your option. These files may not be copied, modified, or distributed except according to those terms.
-

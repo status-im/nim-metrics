@@ -117,8 +117,7 @@ suite "counter":
     check lCounter2.value(labelValues2) == 1
 
   test "sample rate":
-    declareCounter sCounter,
-      "counter with a sample rate set", registry = registry, sampleRate = 0.5
+    declareCounter sCounter, "counter with a sample rate set", registry = registry
     sCounter.inc()
     # No sampling done on our side, just in sending the increments to a StatsD server
     check sCounter.value == 1
