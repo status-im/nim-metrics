@@ -36,9 +36,8 @@ Metric values are `float64`, but the API also accepts `int64` parameters which
 are then cast to `float64`.
 
 By starting an HTTP server, custom metrics (and some default ones) can be
-pulled by Prometheus. By specifying backends, those same custom metrics will be
-pushed to StatsD or Carbon servers, as soon as they are modified. They can also
-be serialised to strings for some quick and dirty logging. Integration with the
+pulled by Prometheus. They can also be serialised to strings for some quick and
+dirty logging. Integration with the
 [Chronicles](https://github.com/status-im/nim-chronicles) logging library is
 available in a separate module.
 
