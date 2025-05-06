@@ -462,22 +462,7 @@ when defined(metrics):
     result.lock.initLock()
     result.register(registry)
 
-#####################
-# push metrics hook #
-#####################
-
 when defined(metrics):
-  var
-    metricsExportHook*:
-      proc(
-        name: string,
-        value: float64,
-        increment: float64,
-        metricType: string,
-        timestamp: Time,
-        sampleRate: float,
-      ) {.nimcall, gcsafe, raises: [].} = nil
-
   proc updateSystemMetrics*() {.gcsafe.} # defined later in this file
   var systemMetricsAutomaticUpdate = true
     # whether to piggy-back on changes of user-defined metrics
@@ -500,12 +485,6 @@ when defined(metrics):
     # this may run from different threads
     if systemMetricsAutomaticUpdate and doUpdateSystemMetrics:
       updateSystemMetrics()
-
-    if metricsExportHook == nil:
-      # no backends configured
-      return
-
-    metricsExportHook(name, value, increment, metricType, timestamp, sampleRate)
 
 ###########
 # counter #

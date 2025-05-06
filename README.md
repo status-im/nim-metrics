@@ -8,8 +8,8 @@
 ## Introduction
 
 Nim metrics client library supporting the [Prometheus](https://prometheus.io/)
-monitoring toolkit, [StatsD](https://github.com/statsd/statsd/wiki) and
-[Carbon](https://graphite.readthedocs.io/en/latest/feeding-carbon.html).
+monitoring toolkit.
+
 Designed to be thread-safe and efficient, it's disabled by default so libraries
 can use it without any overhead for those library users not interested in
 metrics.
@@ -36,9 +36,8 @@ Metric values are `float64`, but the API also accepts `int64` parameters which
 are then cast to `float64`.
 
 By starting an HTTP server, custom metrics (and some default ones) can be
-pulled by Prometheus. By specifying backends, those same custom metrics will be
-pushed to StatsD or Carbon servers, as soon as they are modified. They can also
-be serialised to strings for some quick and dirty logging. Integration with the
+pulled by Prometheus. They can also be serialised to strings for some quick and
+dirty logging. Integration with the
 [Chronicles](https://github.com/status-im/nim-chronicles) logging library is
 available in a separate module.
 
@@ -420,74 +419,12 @@ Screenshot of [Grafana showing data from Prometheus that pulls it from Nimbus wh
 
 ![Grafana screenshot](https://i.imgur.com/AdtavDA.png)
 
-## StatsD
+## Historical notes
 
-Add a [StatsD](https://github.com/statsd/statsd/wiki) export backend where
-metric updates will be pushed as soon as they are created:
-
-```nim
-import metrics, net
-
-when defined(metrics):
-  addExportBackend(
-    metricProtocol = STATSD,
-    netProtocol = UDP,
-    address = "127.0.0.1",
-    port = Port(8125)
-  )
-
-declareCounter myCounter, "some counter"
-myCounter.inc()
-
-# When we incremented the counter, the corresponding data was sent over the wire to the StatsD daemon.
-```
-
-The only supported collector types are counters and gauges. There's a dedicated
-thread that does the networking part. When you update these collectors, data is
-sent over a channel to that thread. If the channel's buffer is full, the data
-is silently dropped. Same for an unreachable backend or any other networking
-error. Reconnections are tried automatically and there's one socket per backend
-being reused.
-
-All the complexity is hidden from the API user and additional latency is kept
-to a minimum. Exported metrics are treated like disposable data and dropped at
-the first sign of trouble.
-
-Counters support an additional parameter just for StatsD: `sampleRate`. This
-allows sending just a percentage of the increments to the StatsD daemon.
-Nothing else changes on the client side.
-
-```nim
-declareCounter sCounter, "counter with a sample rate set", sampleRate = 0.1
-sCounter.inc()
-
-# Now only 10% (on average) of this counter's updates will be sent over the
-# wire. We throw a dice when the time comes, using a simple PRNG. We also
-# inform the StatsD daemon about this rate, so it can adjust its estimated value
-# accordingly.
-```
-
-## Carbon
-
-Add a [Carbon](https://graphite.readthedocs.io/en/latest/feeding-carbon.html)
-export backend where metric updates will be pushed as soon as they are created:
-
-```nim
-import metrics, net
-
-when defined(metrics):
-  addExportBackend(
-    metricProtocol = CARBON,
-    netProtocol = TCP,
-    address = "127.0.0.1",
-    port = Port(2003)
-  )
-```
-
-The implementation is very similar to the StatsD metric exporting described above.
-
-You may add as many export backends as you want, but deleting them from the
-`exportBackends` global variable is unsupported.
+Versions up to `v0.1.2` also supported push metric servers such as
+[StatsD](https://github.com/statsd/statsd/wiki) and
+[Carbon](https://graphite.readthedocs.io/en/latest/feeding-carbon.html) - this
+support has since been removed.
 
 ## Contributing
 
