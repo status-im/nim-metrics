@@ -16,7 +16,8 @@ declarePublicCounter globalPublicCounter, "help"
 declareGauge globalGauge, "help"
 declarePublicGauge globalPublicGauge, "help"
 
-const brokenGlobals = (NimMajor, NimMinor) == (2, 0) and (defined(gcOrc) or defined(gcArc))
+const brokenGlobals =
+  (NimMajor, NimMinor) == (2, 0) and (defined(gcOrc) or defined(gcArc))
 
 proc gcSafetyTest*() {.gcsafe.} = # The test is successful if this proc compiles
   globalCounter.inc 2
