@@ -36,7 +36,7 @@ task test, "Main tests":
   # build it with metrics disabled, first
   build "", "tests/main_tests"
   build "--threads:on", "tests/main_tests"
-  run "-d:metrics --threads:on", "tests/main_tests"
+  run "-d:metrics --threads:on -d:useSysAssert -d:useGcAssert", "tests/main_tests"
 
   build "", "benchmarks/bench_collectors"
   run "-d:metrics --threads:on", "benchmarks/bench_collectors"
