@@ -154,7 +154,8 @@ when defined(metrics):
   proc view(T: type LabelKey, values: openArray[string]): T =
     # TODO some day, we might get view types - until then..
     LabelKey(
-      refs: StringArrView(items: baseAddr(values).makeUncheckedArray(), len: values.len())
+      refs:
+        StringArrView(items: baseAddr(values).makeUncheckedArray(), len: values.len())
     )
 
   proc toMilliseconds*(time: times.Time): int64 =
@@ -548,9 +549,7 @@ when defined(metrics):
 ###########
 
 when defined(metrics):
-  proc newCounterMetrics(
-      name: string, labels, labelValues: CStringArr
-  ): ShSeq[Metric] =
+  proc newCounterMetrics(name: string, labels, labelValues: CStringArr): ShSeq[Metric] =
     ShSeq.init(
       [
         Metric(
@@ -852,9 +851,7 @@ template time*(
 ###########
 
 when defined(metrics):
-  proc newSummaryMetrics(
-      name: string, labels, labelValues: CStringArr
-  ): ShSeq[Metric] =
+  proc newSummaryMetrics(name: string, labels, labelValues: CStringArr): ShSeq[Metric] =
     ShSeq.init(
       [
         Metric(
