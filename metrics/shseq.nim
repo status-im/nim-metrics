@@ -20,10 +20,12 @@ proc grow(s: var ShSeq, size: int) =
   if size <= s.capacity:
     return
 
-  var tmp = cast[ptr UncheckedArray[T]](createU(T, size))
+  var tmp = cast[ptr UncheckedArray[T]](createSharedU(T, size))
   if s.len > 0:
     copyMem(addr tmp[0], addr s.items[0], s.len * sizeof(T))
   s.capacity = size
+  if s.items != nil:
+    deallocShared(s.items)
   s.items = tmp
 
 proc destroy*(s: var ShSeq) =
