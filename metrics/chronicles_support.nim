@@ -42,15 +42,9 @@ when defined(metrics):
           labelValues: openArray[string],
           timestamp: Time,
       ) =
-        res.add(
-          $Metric(
-            name: name,
-            value: value,
-            labels: @labels,
-            labelValues: @labelValues,
-            timestamp: timestamp,
-          )
-        )
+        var s: string
+        s.addText(name, value, labels, labelValues, timestamp)
+        res.add s
     )
     res
 

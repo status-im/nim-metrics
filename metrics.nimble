@@ -29,7 +29,7 @@ proc build(args, path: string) =
 proc run(args, path: string) =
   build args & " --mm:refc -r", path
   if (NimMajor, NimMinor) > (1, 6):
-    build args & " --mm:orc -d:noAlter -r", path
+    build args & " --mm:orc -r", path
 
 ### tasks
 task test, "Main tests":
