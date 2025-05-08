@@ -97,7 +97,8 @@ when defined(metrics):
     # Create a shared-memory copy of the given string that later must be manually
     # deallocated
     var p = cast[cstring](createSharedU(char, v.len + 1))
-    copyMem(p, addr v[0], v.len)
+    if v.len > 0:
+      copyMem(p, baseAddr v, v.len)
     p[v.len] = '\0'
     p
 
