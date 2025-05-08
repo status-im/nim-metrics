@@ -352,6 +352,9 @@ proc `$`*(collector: type IgnoredCollector): string =
 
 when defined(metrics):
   template localGlobal(init: untyped): untyped =
+    when (NimMajor, NimMinor) == (2, 0) and (defined(gcOrc) or defined(gcArc)):
+      {.error: "Globals are too broken in Nim 2.0/ORC/ARC".}
+
     # https://github.com/status-im/nim-metrics/pull/5#discussion_r304687474
     # https://github.com/nim-lang/Nim/issues/24940
     var res {.global.}: typeof(init)
