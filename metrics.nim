@@ -25,25 +25,25 @@ when defined(metrics):
   import std/[algorithm, hashes, strutils, sequtils], stew/ptrops, metrics/common
 
 type
-  CStringArray = object
+  CStringArr = object # Fixed-size array of cstrings - ownership is managed manually
     items: ptr UncheckedArray[cstring]
     len: int
 
-  StringView = object
+  StringArrView = object
     items: ptr UncheckedArray[string]
     len: int
 
   LabelKey = object # Helper type for heterogeneous lookups in the keys table
-    data: CStringArray
-    refs: StringView
+    data: CStringArr
+    refs: StringArrView
 
   Metric* = object
     # Metric needs to be trivial because it's stored in a cross-thread seq and
     # therefore cannot use GC types
     name*: cstring
     value*: float64
-    labels*: CStringArray
-    labelValues*: CStringArray
+    labels*: CStringArr
+    labelValues*: CStringArr
     timestamp*: Time
 
   MetricHandler* = proc(
@@ -102,20 +102,20 @@ when defined(metrics):
     p[v.len] = '\0'
     p
 
-  proc createShared(_: type CStringArray, v: openArray[string]): CStringArray =
+  proc createShared(_: type CStringArr, v: openArray[string]): CStringArr =
     if v.len > 0:
       var p = cast[ptr UncheckedArray[cstring]](createSharedU(cstring, v.len))
       for i in 0 ..< v.len:
         p[i] = cstring.createShared(v[i])
 
-      CStringArray(items: p, len: v.len)
+      CStringArr(items: p, len: v.len)
     else:
-      CStringArray()
+      CStringArr()
 
-  proc `[]`(s: CStringArray, i: int): cstring =
+  proc `[]`(s: CStringArr, i: int): cstring =
     s.items[i]
 
-  proc toStringSeq(v: CStringArray): seq[string] =
+  proc toStringSeq(v: CStringArr): seq[string] =
     for i in 0 ..< v.len:
       result.add $v[i]
 
@@ -149,12 +149,12 @@ when defined(metrics):
   proc init(T: type LabelKey, values: openArray[string]): T =
     # TODO Avoid leaking this shared array, in case we were to clean up the
     #      registry
-    LabelKey(data: CStringArray.createShared(values))
+    LabelKey(data: CStringArr.createShared(values))
 
   proc view(T: type LabelKey, values: openArray[string]): T =
     # TODO some day, we might get view types - until then..
     LabelKey(
-      refs: StringView(items: baseAddr(values).makeUncheckedArray(), len: values.len())
+      refs: StringArrView(items: baseAddr(values).makeUncheckedArray(), len: values.len())
     )
 
   proc toMilliseconds*(time: times.Time): int64 =
@@ -549,7 +549,7 @@ when defined(metrics):
 
 when defined(metrics):
   proc newCounterMetrics(
-      name: string, labels, labelValues: CStringArray
+      name: string, labels, labelValues: CStringArr
   ): ShSeq[Metric] =
     ShSeq.init(
       [
@@ -578,7 +578,7 @@ when defined(metrics):
   ): Counter {.raises: [ValueError, RegistrationError].} =
     result = Counter.newCollector(name, help, labels, registry, "counter", timestamp)
     if labels.len == 0:
-      result.metrics.add newCounterMetrics(name, CStringArray(), CStringArray())
+      result.metrics.add newCounterMetrics(name, CStringArr(), CStringArr())
       result.metricKeys.add LabelKey.init(labels)
 
   proc incCounter(counter: Counter, amount: float64, labelValues: openArray[string]) =
@@ -595,7 +595,7 @@ when defined(metrics):
       valueSym[0].timestamp = timestamp
     do:
       newCounterMetrics(
-        counter.name, CStringArray.createShared(counter.labels), keySym.data
+        counter.name, CStringArr.createShared(counter.labels), keySym.data
       )
 
     updateSystemMetrics()
@@ -697,7 +697,7 @@ template countExceptions*(counter: Counter | type IgnoredCollector, body: untype
 #########
 
 when defined(metrics):
-  proc newGaugeMetrics(name: string, labels, labelValues: CStringArray): ShSeq[Metric] =
+  proc newGaugeMetrics(name: string, labels, labelValues: CStringArr): ShSeq[Metric] =
     ShSeq.init([Metric(name: name, labels: labels, labelValues: labelValues)])
 
   proc newGauge*(
@@ -709,7 +709,7 @@ when defined(metrics):
   ): Gauge {.raises: [ValueError, RegistrationError].} =
     result = Gauge.newCollector(name, help, labels, registry, "gauge", timestamp)
     if labels.len == 0:
-      result.metrics.add newGaugeMetrics(name, CStringArray(), CStringArray())
+      result.metrics.add newGaugeMetrics(name, CStringArr(), CStringArr())
       result.metricKeys.add LabelKey.init(labels)
 
   proc incGauge(gauge: Gauge, amount: float64, labelValues: openArray[string]) =
@@ -719,7 +719,7 @@ when defined(metrics):
       valueSym[0].value += amount
       valueSym[0].timestamp = timestamp
     do:
-      newGaugeMetrics(gauge.name, CStringArray.createShared(gauge.labels), keySym.data)
+      newGaugeMetrics(gauge.name, CStringArr.createShared(gauge.labels), keySym.data)
 
     updateSystemMetrics()
 
@@ -735,7 +735,7 @@ when defined(metrics):
       valueSym[0].value = value.float64
       valueSym[0].timestamp = timestamp
     do:
-      newGaugeMetrics(gauge.name, CStringArray.createShared(gauge.labels), keySym.data)
+      newGaugeMetrics(gauge.name, CStringArr.createShared(gauge.labels), keySym.data)
 
     if doUpdateSystemMetrics:
       updateSystemMetrics()
@@ -853,7 +853,7 @@ template time*(
 
 when defined(metrics):
   proc newSummaryMetrics(
-      name: string, labels, labelValues: CStringArray
+      name: string, labels, labelValues: CStringArr
   ): ShSeq[Metric] =
     ShSeq.init(
       [
@@ -886,7 +886,7 @@ when defined(metrics):
     validateLabels(labels, invalidLabelNames = ["quantile"])
     result = Summary.newCollector(name, help, labels, registry, "summary", timestamp)
     if labels.len == 0:
-      result.metrics.add newSummaryMetrics(name, CStringArray(), CStringArray())
+      result.metrics.add newSummaryMetrics(name, CStringArr(), CStringArr())
       result.metricKeys.add LabelKey.init(labels)
 
   proc observeSummary(
@@ -901,7 +901,7 @@ when defined(metrics):
       valueSym[1].timestamp = timestamp
     do:
       newSummaryMetrics(
-        summary.name, CStringArray.createShared(summary.labels), keySym.data
+        summary.name, CStringArr.createShared(summary.labels), keySym.data
       )
 
 template declareSummary*(
@@ -969,7 +969,7 @@ const defaultHistogramBuckets* =
   [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, Inf]
 when defined(metrics):
   proc newHistogramMetrics(
-      name: string, labels, labelValues: CStringArray, buckets: seq[float64]
+      name: string, labels, labelValues: CStringArr, buckets: seq[float64]
   ): ShSeq[Metric] =
     result = ShSeq.init(
       [
@@ -992,7 +992,7 @@ when defined(metrics):
       ]
     )
     let
-      bucketLabels = CStringArray.createShared(labels.toStringSeq & "le")
+      bucketLabels = CStringArr.createShared(labels.toStringSeq & "le")
       labelValues = labelValues.toStringSeq()
     for bucket in buckets:
       let bucketStr =
@@ -1004,7 +1004,7 @@ when defined(metrics):
         Metric(
           name: cstring.createShared(name & "_bucket"),
           labels: bucketLabels,
-          labelValues: CStringArray.createShared(@labelValues & bucketStr),
+          labelValues: CStringArr.createShared(@labelValues & bucketStr),
         )
       )
 
@@ -1033,7 +1033,7 @@ when defined(metrics):
     result.buckets = bucketsSeq
     if labels.len == 0:
       result.metrics.add newHistogramMetrics(
-        name, CStringArray(), CStringArray(), bucketsSeq
+        name, CStringArr(), CStringArr(), bucketsSeq
       )
       result.metricKeys.add LabelKey.init(labels)
 
@@ -1056,7 +1056,7 @@ when defined(metrics):
     do:
       newHistogramMetrics(
         histogram.name,
-        CStringArray.createShared(histogram.labels),
+        CStringArr.createShared(histogram.labels),
         keySym.data,
         histogram.buckets,
       )
