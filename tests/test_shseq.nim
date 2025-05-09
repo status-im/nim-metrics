@@ -24,23 +24,26 @@ suite "ShSeq":
       s[1] == 1
 
   test "cross-thread init/destroy":
-    var s: ShSeq[int]
+    when defined(threads):
+      var s: ShSeq[int]
 
-    var t: Thread[ptr ShSeq[int]]
+      var t: Thread[ptr ShSeq[int]]
 
-    proc threadFunc(s: ptr ShSeq[int]) {.thread.} =
-      s[].add(2)
-      s[].add(1)
-      s[].add(0)
+      proc threadFunc(s: ptr ShSeq[int]) {.thread.} =
+        s[].add(2)
+        s[].add(1)
+        s[].add(0)
 
-    createThread(t, threadFunc, addr s)
+      createThread(t, threadFunc, addr s)
 
-    t.joinThread()
+      t.joinThread()
 
-    check:
-      s[0] == 2
+      check:
+        s[0] == 2
 
-    s.destroy()
+      s.destroy()
 
-    check:
-      s.len == 0
+      check:
+        s.len == 0
+    else:
+      skip()
