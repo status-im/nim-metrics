@@ -6,6 +6,8 @@
 
 import net, os, unittest2, ../metrics
 
+import ./test_shseq
+
 when defined(metrics):
   import times
 
@@ -13,6 +15,9 @@ declareCounter globalCounter, "help"
 declarePublicCounter globalPublicCounter, "help"
 declareGauge globalGauge, "help"
 declarePublicGauge globalPublicGauge, "help"
+
+const brokenGlobals =
+  (NimMajor, NimMinor) == (2, 0) and (defined(gcOrc) or defined(gcArc))
 
 proc gcSafetyTest*() {.gcsafe.} = # The test is successful if this proc compiles
   globalCounter.inc 2
@@ -45,8 +50,10 @@ suite "counter":
       expect ValueError:
         var tmp = newCounter("1337", "invalid name")
 
-  when not defined(noAlter):
-    test "alternative API":
+  test "alternative API":
+    when brokenGlobals:
+      skip()
+    else:
       counter("one_off_counter").inc()
       check counter("one_off_counter").value == 1
       counter("one_off_counter").inc(0.5)
@@ -116,6 +123,14 @@ suite "counter":
     lCounter2.inc(labelValues = labelValues2)
     check lCounter2.value(labelValues2) == 1
 
+    declareCounter lCounter3, "l3 help", ["aaa"]
+    for i in 0 ..< 4:
+      for j in ["d", "b", "c", "a", "e"]:
+        lCounter3.inc(1, [j])
+
+    for j in ["d", "b", "c", "a", "e"]:
+      check lCounter3.value([j]) == 4
+
   test "sample rate":
     declareCounter sCounter, "counter with a sample rate set", registry = registry
     sCounter.inc()
@@ -159,8 +174,10 @@ suite "gauge":
   test "GlobalGauge value":
     check globalGauge.value == 0.0
 
-  when not defined(noAlter):
-    test "alternative API":
+  test "alternative API":
+    when brokenGlobals:
+      skip()
+    else:
       gauge("one_off_gauge").set(1)
       check gauge("one_off_gauge").value == 1
       gauge("one_off_gauge").inc(0.5)
@@ -215,8 +232,10 @@ suite "summary":
     check mySummary.valueByName("mySummary_count") == 2
     check mySummary.valueByName("mySummary_sum") == 10.5
 
-  when not defined(noAlter):
-    test "alternative API":
+  test "alternative API":
+    when brokenGlobals:
+      skip()
+    else:
       summary("one_off_summary").observe(10)
       check summary("one_off_summary").valueByName("one_off_summary_count") == 1
       check summary("one_off_summary").valueByName("one_off_summary_sum") == 10
@@ -298,8 +317,10 @@ suite "histogram":
     expect ValueError:
       declareHistogram h3, "help", registry = registry, buckets = [3.0, 1.0]
 
-  when not defined(noAlter):
-    test "alternative API":
+  test "alternative API":
+    when brokenGlobals:
+      skip()
+    else:
       histogram("one_off_histogram").observe(2)
       check histogram("one_off_histogram").valueByName(
         "one_off_histogram_bucket", [], ["1.0"]

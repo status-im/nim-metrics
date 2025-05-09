@@ -29,14 +29,14 @@ proc build(args, path: string) =
 proc run(args, path: string) =
   build args & " --mm:refc -r", path
   if (NimMajor, NimMinor) > (1, 6):
-    build args & " --mm:orc -d:noAlter -r", path
+    build args & " --mm:orc -r", path
 
 ### tasks
 task test, "Main tests":
   # build it with metrics disabled, first
   build "", "tests/main_tests"
   build "--threads:on", "tests/main_tests"
-  run "-d:metrics --threads:on", "tests/main_tests"
+  run "-d:metrics --threads:on -d:useSysAssert -d:useGcAssert", "tests/main_tests"
 
   build "", "benchmarks/bench_collectors"
   run "-d:metrics --threads:on", "benchmarks/bench_collectors"
