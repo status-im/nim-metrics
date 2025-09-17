@@ -10,9 +10,8 @@ jobs:
   build:
     uses: status-im/nimbus-common-workflow/.github/workflows/common.yml@main
     with:
-      nim-versions: '["version-2-0", "version-2-2", "devel"]'
       test-command: |
-        nimble install -y chronicles@#head
+        nimble install -y chronicles
         nimble install -y unittest2
         nimble test
         nimble test_chronicles
