@@ -12,10 +12,10 @@ jobs:
     with:
       nimble-version: 9207e8b2bbdf66b5a4d1020214cff44d2d30df92
       test-command: |
-        nimble install -y chronicles
-        nimble install -y unittest2
-        nimble test
-        nimble test_chronicles
+        # nimble install -y chronicles
+        # nimble install -y unittest2
+        nimble --requires:unittest2 test
+        nimble --requires:unittest2 --requires:chronicles test_chronicles
 
   nph:
     runs-on: ubuntu-latest
