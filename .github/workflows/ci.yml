@@ -12,8 +12,6 @@ jobs:
     with:
       nimble-version: b920dad9ed76c6619be3ec0cfbf0dde6f9e39092
       test-command: |
-        # nimble install -y chronicles
-        # nimble install -y unittest2
         nimble --requires:unittest2 test
         nimble --requires:unittest2 --requires:chronicles test_chronicles
 
