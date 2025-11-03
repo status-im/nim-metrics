@@ -44,6 +44,9 @@ task test, "Main tests":
   run "", "tests/chronos_server_tests"
   run "-d:metrics --threads:on -d:nimTypeNames", "tests/chronos_server_tests"
 
+when (NimMajor, NimMinor) < (2, 0):
+  taskRequires "test_chronicles", "chronicles < 0.12"
+
 task test_chronicles, "Chronicles tests":
   build "", "tests/chronicles_tests"
   run "-d:metrics --threads:on", "tests/chronicles_tests"
