@@ -369,14 +369,15 @@ when defined(metrics):
     var res = NaN
     # Don't access the "metrics" field directly, so we can support custom
     # collectors.
+    let targetLabelValues = labelValues
     {.gcsafe.}:
       proc findMetric(
           name: string,
           value: float64,
-          labels, labelValues: openArray[string],
+          labels, metricLabelValues: openArray[string],
           timestamp: Time,
       ) =
-        if res != res and labelValues == labelValues:
+        if res != res and metricLabelValues == targetLabelValues:
           res = value
 
       collect(collector, findMetric)
