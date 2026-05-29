@@ -367,9 +367,10 @@ when defined(metrics):
       collector: Collector, labelValues: openArray[string] = []
   ): float64 {.gcsafe, raises: [KeyError].} =
     var res = NaN
+    # Capture labelValues in a seq to avoid shadowing in inner proc
+    let targetLabelValues = @labelValues
     # Don't access the "metrics" field directly, so we can support custom
     # collectors.
-    let targetLabelValues = labelValues
     {.gcsafe.}:
       proc findMetric(
           name: string,
