@@ -19,7 +19,7 @@ from os import quoteShell
 
 let cfg =
   " --styleCheck:usages --styleCheck:error" &
-  (if verbose: "" else: " --verbosity:0 --hints:off") &
+  (if verbose: "" else: " --verbosity:0") &
   " --skipParentCfg --skipUserCfg --outdir:build " &
   quoteShell("--nimcache:build/nimcache/$projectName") & " -d:metricsTest"
 
