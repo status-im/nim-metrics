@@ -17,12 +17,17 @@ when defined(metricsTest):
 else:
   {.pragma: testOnly, deprecated: "slow helpers used for tests only".}
 
-import std/[locks, monotimes, os, sets, times], metrics/shseq
+import std/[locks, os, sets], metrics/shseq
 
 export shseq
 
 when defined(metrics):
-  import std/[algorithm, hashes, strutils, sequtils], stew/ptrops, metrics/common
+  import
+    std/[algorithm, hashes, sequtils, strutils, times, monotimes],
+    stew/ptrops,
+    metrics/common
+else:
+  type Time = distinct int64
 
 type
   CStringArr = object # Fixed-size array of cstrings - ownership is managed manually
