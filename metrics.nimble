@@ -11,7 +11,7 @@ skipDirs = @["tests", "benchmarks"]
 requires "nim >= 1.6.18",
          "chronos >= 4.0.3",
          "results >= 0.5.0",
-         "stew >= 0.5.0"
+         "stew >= 0.5.2"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
