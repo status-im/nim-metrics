@@ -1,14 +1,14 @@
 mode = ScriptMode.Verbose
 
 packageName = "metrics"
-version = "0.2.2"
+version = "0.2.3"
 author = "Status Research & Development GmbH"
 description = "Metrics client library supporting Prometheus"
 license = "MIT or Apache License 2.0"
 skipDirs = @["tests", "benchmarks"]
 
 ### Dependencies
-requires "nim >= 1.6.14", "chronos >= 4.0.3", "results", "stew"
+requires "nim >= 1.6.18", "chronos >= 4.0.3", "results >= 0.5.0", "stew >= 0.5.2"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
