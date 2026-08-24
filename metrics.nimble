@@ -8,7 +8,10 @@ license = "MIT or Apache License 2.0"
 skipDirs = @["tests", "benchmarks"]
 
 ### Dependencies
-requires "nim >= 1.6.14", "chronos >= 4.0.3", "results", "stew"
+requires "nim >= 2.0",
+          "chronos >= 4.0.3",
+          "results >= 0.5.0",
+          "stew >= 0.5.0"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
@@ -27,8 +30,7 @@ proc build(args, path: string) =
 
 proc run(args, path: string) =
   build args & " --mm:refc -r", path
-  if (NimMajor, NimMinor) > (1, 6):
-    build args & " --mm:orc -r", path
+  build args & " --mm:orc -r", path
 
 ### tasks
 task test, "Main tests":
@@ -42,9 +44,6 @@ task test, "Main tests":
 
   run "", "tests/chronos_server_tests"
   run "-d:metrics --threads:on -d:nimTypeNames", "tests/chronos_server_tests"
-
-when (NimMajor, NimMinor) < (2, 0):
-  taskRequires "test_chronicles", "chronicles < 0.12"
 
 task test_chronicles, "Chronicles tests":
   build "", "tests/chronicles_tests"
