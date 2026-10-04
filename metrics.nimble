@@ -39,9 +39,10 @@ proc runTests(args: string) =
   # Metric values are only collected with `-d:metrics`
   if "-d:metrics" in args:
     run args, "tests/main_tests"
+    run args, "benchmarks/bench_collectors"
   else:
     build args, "tests/main_tests"
-  run args, "benchmarks/bench_collectors"
+    build args, "benchmarks/bench_collectors"
   run args, "tests/chronos_server_tests"
 
 task test, "Run all tests":
