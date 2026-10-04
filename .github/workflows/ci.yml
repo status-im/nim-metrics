@@ -10,10 +10,11 @@ jobs:
   build:
     uses: status-im/nimbus-common-workflow/.github/workflows/common.yml@main
     with:
-      nimble-version: 33e93f4a2516809e696d30ef7757d69f0cfe5079
       test-command: |
-        nimble --requires:unittest2 test
-        nimble --requires:unittest2 --requires:chronicles test_chronicles
+        nimble test_asan
+        nimble test
+        nimble install -y chronicles
+        nimble test_chronicles
 
   nph:
     runs-on: ubuntu-latest
