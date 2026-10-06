@@ -9,7 +9,7 @@ from chronicles import formatIt, expandIt
 import ../metrics, std/[locks, times]
 
 when defined(metrics):
-  import tables
+  import std/tables
 
   formatIt(Metric):
     $it

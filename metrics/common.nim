@@ -5,7 +5,7 @@
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
 when defined(posix):
-  import os, posix
+  import std/[os, posix]
 
 # https://prometheus.io/docs/instrumenting/exposition_formats/#basic-info
 const CONTENT_TYPE* = "text/plain; version=0.0.4; charset=utf-8"

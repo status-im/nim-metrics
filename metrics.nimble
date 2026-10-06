@@ -1,15 +1,15 @@
 mode = ScriptMode.Verbose
 
 packageName = "metrics"
-version = "0.2.3"
+version = "0.3.0"
 author = "Status Research & Development GmbH"
 description = "Metrics client library supporting Prometheus"
 license = "MIT or Apache License 2.0"
 skipDirs = @["tests", "benchmarks"]
 
 ### Dependencies
-requires "nim >= 1.6.18",
-  "chronos >= 4.0.3", "results >= 0.5.0", "stew >= 0.5.2", "unittest2 >= 0.2.0"
+requires "nim >= 2.0.6",
+  "chronos >= 4.0.3", "results >= 0.5.0", "stew >= 0.5.2", "unittest2 >= 0.3.0"
 
 let nimc = getEnv("NIMC", "nim") # Which nim compiler to use
 let lang = getEnv("NIMLANG", "c") # Which backend (c/cpp/js)
@@ -48,16 +48,10 @@ proc runTests(args: string) =
 task test, "Run all tests":
   for args in testArguments:
     runTests args & " --mm:refc"
-    if (NimMajor, NimMinor) > (1, 6):
-      runTests args & " --mm:orc"
+    runTests args & " --mm:orc"
 
 task test_asan, "Run all tests with ASAN":
-  if platform != "x86" and (NimMajor, NimMinor) >= (2, 2):
-    try:
-      exec "echo '#if __clang_major__ < 20\n#error\n#endif' | clang -E - >/dev/null"
-    except OSError:
-      return
-
+  if platform != "x86":
     # https://clang.llvm.org/docs/AddressSanitizer.html
     putEnv("ASAN_OPTIONS", "detect_leaks=0:detect_stack_use_after_return=1")
     # https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html
@@ -70,18 +64,13 @@ task test_asan, "Run all tests with ASAN":
     for args in testArguments:
       runTests args & asanArgs
 
-when (NimMajor, NimMinor) < (2, 0):
-  taskRequires "test_chronicles", "chronicles < 0.12"
-
 task test_chronicles, "Run chronicles tests":
   for args in testArguments:
     run args & " --mm:refc", "tests/chronicles_tests"
-    if (NimMajor, NimMinor) > (1, 6):
-      run args & " --mm:orc", "tests/chronicles_tests"
+    run args & " --mm:orc", "tests/chronicles_tests"
 
 task benchmark, "Run benchmarks":
   run "-d:metrics --debuginfo --threads:on -d:release --mm:refc",
     "benchmarks/bench_collectors"
-  if (NimMajor, NimMinor) > (1, 6):
-    run "-d:metrics --debuginfo --threads:on -d:release --mm:orc",
-      "benchmarks/bench_collectors"
+  run "-d:metrics --debuginfo --threads:on -d:release --mm:orc",
+    "benchmarks/bench_collectors"

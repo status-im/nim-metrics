@@ -37,7 +37,7 @@ proc init*[T](_: type ShSeq, v: openArray[T]): ShSeq[T] =
   var s: ShSeq[T]
   if v.len > 0:
     s.grow(v.len)
-    copyMem(addr s.items[0], unsafeAddr v[0], v.len * sizeof(T))
+    copyMem(addr s.items[0], addr v[0], v.len * sizeof(T))
     s.len = v.len
 
   s
