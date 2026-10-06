@@ -4,12 +4,12 @@
 #   * Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
-import net, os, unittest2, ../metrics
+import std/[net, os], unittest2, ../metrics
 
 import ./test_shseq
 
 when defined(metrics):
-  import times
+  import std/times
 
 declareCounter globalCounter, "help"
 declarePublicCounter globalPublicCounter, "help"

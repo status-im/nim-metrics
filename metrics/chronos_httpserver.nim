@@ -144,7 +144,7 @@ when defined(metrics):
     zeroMem(cast[pointer](addr buffer[0]), len(buffer))
     buffer[0] = mtype
     if length > 0:
-      copyMem(addr buffer[1], unsafeAddr message[0], length)
+      copyMem(addr buffer[1], addr message[0], length)
     let res = await m.respTransp.write(addr buffer[0], len(buffer))
     if res != len(buffer):
       raiseMetricsError("Incomplete response has been sent")
